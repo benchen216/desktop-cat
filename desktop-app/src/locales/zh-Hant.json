@@ -1,6 +1,7 @@
 {
   "app": {
-    "name": "桌面貓"
+    "name": "桌面貓",
+    "devName": "桌面貓 開發版"
   },
   "menu": {
     "showCat": "顯示貓咪",
@@ -13,16 +14,25 @@
     "autoCheckUpdates": "自動檢查更新",
     "downloadingUpdate": "正在下載更新…",
     "language": "語言",
-    "tip": "請貓貓吃罐罐",
+    "tip": "贊助貓貓吃罐罐",
     "quit": "離開"
   },
   "update": {
     "title": "桌面貓有新版本",
-    "versions": "有新版 {{version}} 可以更新（你現在是 {{current}}），要現在更新嗎？",
+    "versions": "新版 {{version}}（你現在是 {{current}}）",
     "overwrites": "如果你自己改過桌面貓的程式，更新會把改動蓋掉。",
     "skip": "略過此版本",
     "later": "稍後提醒我",
     "install": "安裝更新"
+  },
+  "claudeCat": {
+    "title": "Claude 貓外掛無法自動更新",
+    "paste": "把這個連結貼給 Claude，請它幫你更新 Claude 貓外掛：",
+    "after": "更新後，新開的對話就會用新版。",
+    "paired": "搭配這一版桌面貓的是 {{version}}，你現在用的比較舊。",
+    "copy": "複製連結",
+    "copied": "已複製",
+    "close": "關閉"
   },
   "language": {
     "system": "使用系統設定",

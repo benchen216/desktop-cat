@@ -15,6 +15,10 @@ const CALL_AGAIN_MS = 3 * 60 * 1000
 // The Claude desktop app's own id for a conversation, in the shape its links
 // take: anything else in a report is not passed on to them.
 const APP_SESSION = /^local_[A-Za-z0-9-]{1,64}$/
+// A Claude cat's version, as its manifest gives it.
+const VERSION = /^\d{1,6}(\.\d{1,6}){0,3}$/
+// Claude cats before 1.21.0 never said their version: this one at most.
+const LAST_UNTOLD_VERSION = '1.20.0'
 
 /**
  * Sad first, unless its head was petted since; then a conversation waiting on
@@ -50,8 +54,20 @@ function pickMood(sessions, now, comfortedAt = 0) {
   ).mood
 }
 
+/** The Claude cat's version in a report: as it says, or null when it couldn't
+    tell (its manifest unread); an older one, which never said, is taken at
+    the last version that didn't. */
+function pluginVersionOf(report) {
+  if (!Object.hasOwn(report, 'pluginVersion')) {
+    return LAST_UNTOLD_VERSION
+  }
+
+  return typeof report.pluginVersion === 'string' && VERSION.test(report.pluginVersion) ? report.pluginVersion : null
+}
+
 function parseSession(text) {
-  const { mood, updatedAt, ended, calledAt, callsAgain, sadAt, movedOn, appSession } = JSON.parse(text)
+  const report = JSON.parse(text)
+  const { mood, updatedAt, ended, calledAt, callsAgain, sadAt, movedOn, appSession } = report
 
   return MOODS.has(mood) && Number.isFinite(updatedAt)
     ? {
@@ -66,6 +82,8 @@ function parseSession(text) {
         // Where the Claude desktop app can open it: none from a terminal, or
         // from an older Claude cat.
         appSession: typeof appSession === 'string' && APP_SESSION.test(appSession) ? appSession : null,
+        // Which Claude cat the conversation runs, to tell an older one.
+        pluginVersion: pluginVersionOf(report),
       }
     : null
 }

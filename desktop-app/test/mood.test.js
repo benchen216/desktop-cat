@@ -124,8 +124,9 @@ test('reading clears what is over and survives a half-written file', () => {
   const sessions = readSessions(dir, NOW)
 
   // A report with no word on meowing again is an older Claude cat's: it wants
-  // it. One with no word of the Claude app has nothing there to open.
-  const calm = { ended: false, callsAgain: true, appSession: null }
+  // it. One with no word of the Claude app has nothing there to open. One with
+  // no version is from a Claude cat before 1.21.0, which never said.
+  const calm = { ended: false, callsAgain: true, appSession: null, pluginVersion: '1.20.0' }
   assert.deepEqual(sessions.sort((a, b) => a.id.localeCompare(b.id)), [
     { mood: 'working', updatedAt: NOW, ...calm, calledAt: 0, sadAt: 0, movedOn: false, id: 'busy' },
     { mood: 'calling', updatedAt: NOW, ...calm, calledAt: NOW, sadAt: 0, movedOn: false, id: 'calling' },
@@ -156,6 +157,21 @@ test("a report keeps the Claude app's id for its conversation only in the shape 
     number: null,
     long: null,
   })
+  fs.rmSync(dir, { recursive: true })
+})
+
+test("a report keeps the Claude cat's version only in a version's shape; one that couldn't tell says null", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'desktop-cat-'))
+  const write = (name, fields) => fs.writeFileSync(path.join(dir, name), JSON.stringify({ mood: 'working', updatedAt: NOW, ...fields }))
+
+  write('new.json', { pluginVersion: '1.21.0' })
+  write('untold.json', { pluginVersion: null })
+  write('odd.json', { pluginVersion: '1.21.0; rm -rf' })
+  write('number.json', { pluginVersion: 121 })
+  write('old.json', {})
+
+  const kept = Object.fromEntries(readSessions(dir, NOW).map(session => [session.id, session.pluginVersion]))
+  assert.deepEqual(kept, { new: '1.21.0', untold: null, odd: null, number: null, old: '1.20.0' })
   fs.rmSync(dir, { recursive: true })
 })
 

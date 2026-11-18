@@ -1,3 +1,4 @@
+import type { AgentInfo } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
@@ -157,13 +158,46 @@ test('each conversation reports its mood to its own file, in order', async ($, o
   await $.session.end({ reason: 'other', sessionId: 'abc', resume: { id: 'abc' } })
 
   const path = 'C:/Users/me/.desktop-cat/sessions/abc.json'
-  const calm = { callsAgain: true, sadAt: 0, movedOn: false }
+  // No manifest to read here: the desktop cat then can't tell how old this Claude cat is.
+  const calm = { callsAgain: true, sadAt: 0, movedOn: false, pluginVersion: null }
   expect(writes).toEqual([
     { path, mood: 'working', updatedAt: 1234, ended: false, calledAt: 0, ...calm },
     { path, mood: 'resting', updatedAt: 1234, ended: false, calledAt: 0, ...calm },
     { path, mood: 'resting', updatedAt: 1234, ended: false, calledAt: 1234, ...calm },
     { path, mood: 'resting', updatedAt: 1234, ended: true, calledAt: 1234, ...calm },
   ])
+})
+
+test("each report names this Claude cat's version, read once from its own manifest", async ($, on) => {
+  const read: string[] = []
+  const written: { pluginVersion?: unknown }[] = []
+
+  on('env.get', (_, e) => ({ value: e.name === 'USERPROFILE' ? 'C:/Users/me' : undefined }))
+  on('session.id', () => ({ value: 'abc' }))
+  on('clock.now', () => ({ value: 1234 }))
+  on('fs.read', (_, e) => {
+    read.push(e.path.replaceAll('\\', '/'))
+
+    return { value: JSON.stringify({ name: 'desktop-cat', version: '9.8.7' }) }
+  })
+  on('fs.write', (_, e) => {
+    written.push(JSON.parse(e.text))
+
+    return { value: undefined }
+  })
+  on('tool.call', () => ({ result: {} }))
+  on('turn.complete', () => ({ text: '' }))
+  on('session.end', (_, e) => ({ sessionId: e.sessionId }))
+
+  await $.tool.call({ tool: 'Bash', command: 'ls' })
+  await $.turn.complete({ reason: 'answer', answer: '', durationMs: 1, isAborted: false, turnId: 't' })
+  // The last report waits for those before it.
+  await $.session.end({ reason: 'other', sessionId: 'abc', resume: { id: 'abc' } })
+
+  expect(written.length).toBeGreaterThanOrEqual(3)
+  expect(written.every(report => report.pluginVersion === '9.8.7')).toBe(true)
+  expect(read.filter(path => path.endsWith('/plugin.json'))).toHaveLength(1)
+  expect(read.find(path => path.endsWith('/plugin.json'))).toMatch(/\/\.claude-plugin\/plugin\.json$/)
 })
 
 const reports = (on: Parameters<TestBody>[1]) => {
@@ -505,6 +539,126 @@ test('a next-step box with no question ends the turn as before: the cat rests', 
 
   expect((await paneCat($)).label).toBe('休息中')
   expect(written.at(-1)).toMatchObject({ mood: 'resting', calledAt: 1234 })
+})
+
+type Helper = Pick<AgentInfo, 'status' | 'spawnedBy'>
+
+/** A conversation, started, whose helpers stand as `agents` says at each look,
+    and the reports the desktop cat reads. */
+const sendingHelpers = async ($: Parameters<TestBody>[0], on: Parameters<TestBody>[1], agents: Helper[]) => {
+  const written: { mood: string; updatedAt: number; calledAt: number }[] = []
+
+  on('env.get', (_, e) => ({ value: e.name === 'USERPROFILE' ? 'C:/Users/me' : undefined }))
+  on('session.id', () => ({ value: 'abc' }))
+  const clock = mock.clock(on, { now: 1234 })
+  on('fs.exists', () => ({ value: false }))
+  on('fs.write', (_, e) => {
+    written.push(JSON.parse(e.text))
+
+    return { value: undefined }
+  })
+  on('command.register', () => ({ value: { command: 'cat' } }))
+  on('tool.register', () => ({ value: { tool: SAD_TOOL } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('tool.call', () => ({ result: {} }))
+  on('turn.complete', () => ({ text: '' }))
+  on('agent.list', () => ({
+    value: agents.map((agent, index) => ({
+      id: `helper-${index}`,
+      description: 'Build the feature',
+      type: 'general-purpose',
+      ...agent,
+    })),
+  }))
+  await $.session.start(START)
+
+  /** One turn of the conversation's own, to its answer. */
+  const turn = async () => {
+    await $.tool.call({ tool: 'Bash', command: 'ls' })
+    await $.turn.complete(ANSWERED)
+    await clock.settle()
+  }
+
+  return { written, clock, turn }
+}
+
+test('a turn that ends while helpers work on: the cat waits on them, ears up, with no meow', async ($, on) => {
+  const helper: Helper = { status: 'running' }
+  const { written, turn } = await sendingHelpers($, on, [helper])
+
+  // Running, yet to start, or held on work of its own: at work all the same.
+  for (const status of ['running', 'pending', 'waiting'] as const) {
+    helper.status = status
+    await turn()
+
+    const cat = await paneCat($)
+    expect(cat.label).toBe('助手做事中')
+    expect(cat.alt).toMatch(/ears up/)
+    // The desktop cat draws it with its ears up too, and nothing is done yet to meow about.
+    expect(written.at(-1)).toMatchObject({ mood: 'waiting', calledAt: 0 })
+  }
+})
+
+test("an idle teammate, a helper that ended, or a plugin's own agent does not keep the cat up", async ($, on) => {
+  const { written, turn } = await sendingHelpers($, on, [
+    { status: 'idle' },
+    { status: 'completed' },
+    { status: 'failed' },
+    { status: 'killed' },
+    { status: 'running', spawnedBy: 'some-plugin' },
+  ])
+
+  await turn()
+
+  expect((await paneCat($)).label).toBe('休息中')
+  expect(written.at(-1)).toMatchObject({ mood: 'resting', calledAt: 1234 })
+})
+
+test("woken by its helpers' end, the conversation's answer meows as before", async ($, on) => {
+  const helper: Helper = { status: 'running' }
+  const { written, turn } = await sendingHelpers($, on, [helper])
+
+  await turn()
+  helper.status = 'completed'
+  await turn()
+
+  expect((await paneCat($)).label).toBe('休息中')
+  expect(written.at(-1)).toMatchObject({ mood: 'resting', calledAt: 1234 })
+})
+
+test('once the last helper is done, the cat sleeps even when nothing wakes the conversation', async ($, on) => {
+  const first: Helper = { status: 'running' }
+  const second: Helper = { status: 'running' }
+  const { written, clock, turn } = await sendingHelpers($, on, [first, second])
+
+  await turn()
+  first.status = 'completed'
+  await clock.advance(10_000)
+  expect((await paneCat($)).label).toBe('助手做事中')
+
+  // The other is stopped, and nothing wakes the conversation: after a moment
+  // for it to wake, the cat sleeps, quietly.
+  second.status = 'killed'
+  await clock.advance(2000)
+  expect((await paneCat($)).label).toBe('助手做事中')
+  await clock.advance(6000)
+  expect((await paneCat($)).label).toBe('休息中')
+  expect(written.at(-1)).toMatchObject({ mood: 'resting', calledAt: 0 })
+})
+
+test('while helpers work on for long, the desktop cat keeps hearing that the conversation is busy', async ($, on) => {
+  const { written, clock, turn } = await sendingHelpers($, on, [{ status: 'running' }])
+
+  await turn()
+  const told = written.length
+  await clock.advance(9 * 60 * 1000)
+  expect(written).toHaveLength(told)
+
+  // Well before the half hour after which the desktop cat stops counting it.
+  await clock.advance(60 * 1000)
+  expect(written).toHaveLength(told + 1)
+  expect(written.at(-1)?.mood).toBe('waiting')
+  expect(written.at(-1)?.updatedAt).toBeGreaterThanOrEqual(1234 + 10 * 60 * 1000)
 })
 
 test("in the Claude app the report carries the app's own id for the conversation, for the desktop cat to open it", async ($, on) => {

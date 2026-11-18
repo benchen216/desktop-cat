@@ -2,17 +2,17 @@ const assert = require('node:assert/strict')
 const { EventEmitter } = require('node:events')
 const { test } = require('node:test')
 
-const { ASK_EVERY_MS, DAY_MS, FIRST_LOOK_AFTER_MS, isNewer, isTimeToLook, keepUpToDate } = require('../src/updates')
+const { ASK_EVERY_MS, DAY_MS, FIRST_LOOK_AFTER_MS, MOST_NOTES, isNewer, isTimeToLook, keepUpToDate, notesFor } = require('../src/updates')
 
 const NOW = 1_800_000_000_000
 const HOUR_MS = 60 * 60 * 1000
 
 /** A pretend GitHub, clock, settings file and person, and the cat's updater on them. */
-function setUp({ version = '1.27.0', stored = {}, isOn = true, online = true, newer = null, answers = [] } = {}) {
+function setUp({ version = '1.27.0', stored = {}, isOn = true, online = true, newer = null, releaseNotes, answers = [] } = {}) {
   const clock = { now: NOW }
   const timers = []
   const saved = { lookedAt: 0, skippedVersion: null, ...stored }
-  const calls = { looks: 0, asked: [], downloads: 0, installs: [] }
+  const calls = { looks: 0, asked: [], notes: [], downloads: 0, installs: [] }
   const updater = new EventEmitter()
   const world = { online, newer, answers: [...answers], downloadFails: false, waitForAnswer: null }
 
@@ -35,7 +35,7 @@ function setUp({ version = '1.27.0', stored = {}, isOn = true, online = true, ne
     if (world.newer === null) {
       updater.emit('update-not-available', { version })
     } else {
-      updater.emit('update-available', { version: world.newer })
+      updater.emit('update-available', { version: world.newer, releaseNotes })
     }
 
     return null
@@ -58,8 +58,9 @@ function setUp({ version = '1.27.0', stored = {}, isOn = true, online = true, ne
     version,
     isOn: () => world.isOn ?? isOn,
     // The person answers in turn; with no answer left, they close the window.
-    ask: async newVersion => {
+    ask: async (newVersion, notes) => {
       calls.asked.push(newVersion)
+      calls.notes.push(notes)
       return world.waitForAnswer ?? world.answers.shift() ?? 'later'
     },
     store: { get: () => ({ ...saved }), set: change => Object.assign(saved, change) },
@@ -299,4 +300,61 @@ test('an error from the updater never ends the program', () => {
   const { updater } = setUp()
 
   assert.doesNotThrow(() => updater.emit('error', new Error('bad sha512')))
+})
+
+// As electron-builder writes build/release-notes.md into latest.yml.
+const NOTES = [
+  '## zh-Hant',
+  '',
+  '- 修正背景工作時，桌面貓會顯示睡覺的問題',
+  '- 更新視窗會先列出新版有什麼新功能',
+  '',
+  '## en',
+  '',
+  '- Fixes an issue where Desktop Cat appeared asleep while work was still running in the background',
+  "- The update window now shows what's new",
+  '',
+].join('\n')
+
+test('the release notes come to the window with the new version', async () => {
+  const { calls, pass } = setUp({ newer: '1.28.0', releaseNotes: NOTES })
+  await pass(FIRST_LOOK_AFTER_MS)
+  assert.deepEqual(calls.asked, ['1.28.0'])
+  assert.deepEqual(calls.notes, [NOTES])
+})
+
+test("what's new is read in the cat's language, from its own section", () => {
+  assert.deepEqual(notesFor(NOTES, ['zh-Hant', 'en']), ['修正背景工作時，桌面貓會顯示睡覺的問題', '更新視窗會先列出新版有什麼新功能'])
+  assert.deepEqual(notesFor(NOTES, ['en', 'zh-Hant']), [
+    'Fixes an issue where Desktop Cat appeared asleep while work was still running in the background',
+    "The update window now shows what's new",
+  ])
+  assert.deepEqual(notesFor(NOTES.replaceAll('\n', '\r\n'), ['EN']), notesFor(NOTES, ['en']), 'Windows line endings, any case')
+})
+
+test('a language with no section falls back to the next one asked for', () => {
+  assert.deepEqual(notesFor(NOTES, ['ja', 'en', 'zh-Hant']), notesFor(NOTES, ['en']))
+  assert.deepEqual(notesFor('## zh-Hant\n- 只有中文\n## en\n', ['en', 'zh-Hant']), ['只有中文'], 'an empty section counts as none')
+})
+
+test("notes in any other shape show no list: the window then shows what's new nowhere", () => {
+  // The updater falls back to the release's page on GitHub, as HTML.
+  assert.deepEqual(notesFor('<h2>zh-Hant</h2><ul><li>修正</li></ul>', ['zh-Hant']), [])
+  assert.deepEqual(notesFor('- a line with no section above it', ['en']), [])
+  assert.deepEqual(notesFor(undefined, ['en']), [])
+  assert.deepEqual(notesFor(null, ['en']), [])
+  assert.deepEqual(notesFor(42, ['en']), [])
+})
+
+test('every version\'s notes, as a list, give the newest one', () => {
+  const list = [{ version: '1.29.0', note: '## en\n- newest' }, { version: '1.28.0', note: '## en\n- older' }]
+  assert.deepEqual(notesFor(list, ['en']), ['newest'])
+  assert.deepEqual(notesFor([], ['en']), [])
+})
+
+test('a long list is cut short, and so is a long line', () => {
+  const many = `## en\n${Array.from({ length: MOST_NOTES + 3 }, (_, i) => `- news ${i}`).join('\n')}\n- ${'x'.repeat(500)}`
+  const notes = notesFor(many, ['en'])
+  assert.equal(notes.length, MOST_NOTES)
+  assert.ok(notesFor(`## en\n- ${'x'.repeat(500)}`, ['en'])[0].length <= 200)
 })

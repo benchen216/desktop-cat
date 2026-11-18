@@ -1,4 +1,6 @@
-export type Mood = 'resting' | 'waiting' | 'calling' | 'thinking' | 'working' | 'talking'
+// 'delegating': the conversation's turn is over, but helpers it sent off are
+// still at work in the background.
+export type Mood = 'resting' | 'waiting' | 'delegating' | 'calling' | 'thinking' | 'working' | 'talking'
 export type Coat = 'calico' | 'tuxedo' | 'siamese'
 export type Cushion = 'matcha' | 'milk-tea' | 'dusty-pink' | 'dusty-blue' | 'lavender' | 'night-sky' | 'berry' | 'cement'
 // 'none' for home, or the name of a place in hooks/place-art.ts (none in a copy

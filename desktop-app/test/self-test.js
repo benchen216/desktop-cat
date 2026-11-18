@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
-const { app, BrowserWindow, Menu, screen, shell } = require('electron')
+const { app, BrowserWindow, Menu, clipboard, screen, shell } = require('electron')
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'desktop-cat-test-'))
 
@@ -11,6 +11,12 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'desktop-cat-test-'))
 const openedPages = []
 shell.openExternal = async page => {
   openedPages.push(page)
+}
+// Words the program would copy, noted here instead of copied: whatever the
+// person has on the clipboard stays there.
+const copied = []
+clipboard.writeText = async text => {
+  copied.push(text)
 }
 const sessions = path.join(root, 'sessions')
 const shots = process.env.DESKTOP_CAT_TEST_SHOTS ?? root
@@ -63,14 +69,19 @@ autoUpdater.downloadUpdate = () => {
     finishDownload = resolve
   })
 }
-// Windows' own window that tells of a new version, answered here in turn
-// (by button: 0 skip, 1 later, 2 install).
-const updateWindows = []
-const updateAnswers = []
-require('electron').dialog.showMessageBox = async (...args) => {
-  updateWindows.push(args.at(-1))
-  return { response: updateAnswers.shift() ?? 1, checkboxChecked: false }
+// Claude Code, answered here: the tests never run the real one. This one
+// lists no Claude cat under its public name, so only the conversations'
+// reports can tell which one they run. Its first try comes at once.
+const claudeCat = require('../src/claude-cat')
+const claudeRan = []
+claudeCat.claudeCode.find = () => ['pretend-claude.exe']
+claudeCat.claudeCode.run = async (file, args) => {
+  claudeRan.push(args.join(' '))
+  return { code: 0, stdout: '[]' }
 }
+claudeCat.TIMES.firstTryAfterMs = 100
+// The cat's own windows that tell of something and ask (src/notices.js).
+const { openNow } = require('../src/notices')
 
 process.env.DESKTOP_CAT_SESSIONS_DIR = sessions
 app.setPath('userData', path.join(root, 'user-data'))
@@ -87,11 +98,51 @@ const HAS_PLACES = require('../src/scenes').PLACES.length > 0
 const scenes = HAS_PLACES ? require('./self-test-scenes') : null
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
-const report = (id, mood, updatedAt = Date.now(), ended = false, calledAt = 0, sadAt = 0, appSession = undefined) =>
+// Each conversation runs the Claude cat this desktop cat goes with, unless a test says otherwise.
+const report = (
+  id,
+  mood,
+  updatedAt = Date.now(),
+  ended = false,
+  calledAt = 0,
+  sadAt = 0,
+  appSession = undefined,
+  pluginVersion = claudeCat.PAIRED_CLAUDE_CAT,
+) =>
   fs.writeFileSync(
     path.join(sessions, `${id}.json`),
-    JSON.stringify({ mood, updatedAt, ended, calledAt, sadAt, movedOn: false, appSession }),
+    JSON.stringify({ mood, updatedAt, ended, calledAt, sadAt, movedOn: false, appSession, pluginVersion }),
   )
+
+/** The notice window open now, once shown with its words in place. */
+async function noticeShown(what) {
+  await waitFor(() => openNow()?.win.isVisible() === true, what)
+  return openNow()
+}
+const inNotice = (notice, code) => notice.win.webContents.executeJavaScript(code)
+// What a notice window shows, read from its page.
+const NOTICE_SHOWS = `({
+  title: document.title,
+  heading: document.querySelector('h1').textContent,
+  notes: [...document.querySelectorAll('li')].map(item => item.textContent),
+  lines: [...document.querySelectorAll('main > p:not([class])')].map(line => line.textContent),
+  link: document.querySelector('.link')?.textContent ?? null,
+  hint: document.querySelector('.hint')?.textContent ?? null,
+  warning: document.querySelector('.warn')?.textContent ?? null,
+  versions: document.querySelector('.versions')?.textContent ?? null,
+  buttons: [...document.querySelectorAll('button')].map(button => button.textContent),
+  focused: document.activeElement.textContent,
+  face: document.querySelectorAll('.band svg').length,
+  tail: document.querySelectorAll('#sitting-tail').length,
+  moving: document.querySelectorAll('.band animate, .band animateTransform').length,
+})`
+const pressKey = (notice, keyCode) => {
+  for (const type of ['keyDown', 'char', 'keyUp']) {
+    notice.win.webContents.sendInputEvent({ type, keyCode })
+  }
+}
+// As electron-builder puts build/release-notes.md in latest.yml.
+const RELEASE_NOTES = '## zh-Hant\n\n- 第一件新事\n- 第二件新事\n\n## en\n\n- The first new thing\n'
 
 async function waitFor(check, what, ms = 5000) {
   for (let i = 0; i < ms / 50; i += 1) {
@@ -518,12 +569,12 @@ async function run() {
       ...(TAKES_PUBLIC_VERSIONS ? ['自動檢查更新'] : []),
       '語言',
       '—',
-      '請貓貓吃罐罐',
+      '贊助貓貓吃罐罐',
       '離開',
     ],
     'the items in four groups',
   )
-  item('請貓貓吃罐罐').click()
+  item('贊助貓貓吃罐罐').click()
   assert.equal(openedPages.at(-1), 'https://p.ecpay.com.tw/34D38BD', 'in Chinese, the Taiwanese tip page in the browser')
   assert.equal(item('顯示貓咪').type, 'checkbox', 'showing the cat is ticked, not a word that changes')
   assert.equal(item('顯示貓咪').checked, true, 'the cat is out')
@@ -637,8 +688,8 @@ async function run() {
   console.log('ok - the voice switch is kept beside the coat, and follows /cat-voice')
 
   // Updates, in the public copy: on until switched off, kept with the
-  // settings. A new version is asked about first, in Windows' own window, and
-  // comes down only after the person's yes.
+  // settings. A new version is asked about first, in the cat's own window,
+  // and comes down only after the person's yes.
   const settingsNow = () => JSON.parse(fs.readFileSync(path.join(root, 'user-data', 'settings.json'), 'utf8'))
 
   if (TAKES_PUBLIC_VERSIONS) {
@@ -652,33 +703,69 @@ async function run() {
     assert.equal(settingsNow().autoUpdate, true, 'and on again')
     assert.deepEqual(updaterCalls, [], 'a copy run from its source never looks')
 
-    // 略過此版本: kept, and that version is not asked about again.
-    updateAnswers.push(0)
-    autoUpdater.emit('update-available', { version: '999.9.8' })
-    await waitFor(() => settingsNow().updateSkipped === '999.9.8', 'the skipped version kept')
-    const [asked] = updateWindows
+    // The window: the news first, in the person's language, the versions last.
+    autoUpdater.emit('update-available', { version: '999.9.8', releaseNotes: RELEASE_NOTES })
+    let notice = await noticeShown('the window telling of a new version')
     assert.deepEqual(
-      { title: asked.title, message: asked.message, detail: asked.detail, buttons: asked.buttons },
+      await inNotice(notice, NOTICE_SHOWS),
       {
         title: '桌面貓',
-        message: '桌面貓有新版本',
-        detail: `有新版 999.9.8 可以更新（你現在是 ${app.getVersion()}），要現在更新嗎？\n\n如果你自己改過桌面貓的程式，更新會把改動蓋掉。`,
+        heading: '桌面貓有新版本',
+        notes: ['第一件新事', '第二件新事'],
+        lines: [],
+        link: null,
+        hint: null,
+        warning: '如果你自己改過桌面貓的程式，更新會把改動蓋掉。',
+        versions: `新版 999.9.8（你現在是 ${app.getVersion()}）`,
         buttons: ['略過此版本', '稍後提醒我', '安裝更新'],
+        focused: '安裝更新',
+        face: 1,
+        tail: 0,
+        moving: 0,
       },
-      "Windows' own window, in the person's words",
+      "in the person's words, the big face at the top, still and with no tail; Enter installs",
     )
-    assert.equal(asked.buttons[asked.defaultId], '安裝更新', 'Enter installs')
-    assert.equal(asked.buttons[asked.cancelId], '稍後提醒我', 'closing the window is later')
-    assert.equal(asked.noLink, true, 'plain buttons')
+    assert.equal(notice.win.getTitle(), '桌面貓')
+    assert.equal(notice.win.getContentBounds().width, 440)
+    assert.equal(
+      await inNotice(notice, "getComputedStyle(document.querySelector('.warn')).color"),
+      'rgb(196, 72, 62)',
+      'the warning in red',
+    )
+    assert.ok(
+      (await inNotice(notice, 'document.documentElement.scrollHeight')) <= notice.win.getContentBounds().height,
+      'the window fits its words',
+    )
+    fs.writeFileSync(path.join(shots, 'update-window.png'), (await notice.win.webContents.capturePage()).toPNG())
+
+    // 略過此版本: kept, and that version is not asked about again.
+    await inNotice(notice, "document.querySelector('[data-answer=skip]').click()")
+    await waitFor(() => settingsNow().updateSkipped === '999.9.8', 'the skipped version kept')
+    await waitFor(() => notice.win.isDestroyed(), 'the window to close')
     autoUpdater.emit('update-available', { version: '999.9.8' })
-    await wait(100)
-    assert.equal(updateWindows.length, 1, 'a skipped version is not asked about again')
+    await wait(300)
+    assert.equal(openNow(), null, 'a skipped version is not asked about again')
     assert.deepEqual(updaterCalls, [], 'nothing came down')
 
-    // 安裝更新: it comes down, the menu says so, then the cat goes in as it.
-    updateAnswers.push(2)
+    // Esc, or closing the window, is later: asked again the next day.
     autoUpdater.emit('update-available', { version: '999.9.9' })
+    notice = await noticeShown('the window again, for a newer version')
+    assert.deepEqual((await inNotice(notice, NOTICE_SHOWS)).notes, [], 'no notes in latest.yml: no list')
+    pressKey(notice, 'Escape')
+    await waitFor(() => notice.win.isDestroyed(), 'Esc to close it')
+    autoUpdater.emit('update-available', { version: '999.9.9' })
+    notice = await noticeShown('the window asked again')
+    notice.win.close()
+    await waitFor(() => openNow() === null, 'its close button to close it')
+    assert.deepEqual(updaterCalls, [], 'later: nothing came down')
+    assert.equal(settingsNow().updateSkipped, '999.9.8', 'nor skipped')
+
+    // Enter, on 安裝更新: it comes down, the menu says so, then the cat goes in as it.
+    autoUpdater.emit('update-available', { version: '999.9.9' })
+    notice = await noticeShown('the window, to install')
+    pressKey(notice, 'Enter')
     await waitFor(() => updaterCalls.includes('download'), 'the download')
+    await waitFor(() => notice.win.isDestroyed(), 'the window closed by the yes')
     item = await openMenu()
     assert.deepEqual(
       lastMenu.slice(0, 3).map(entry => entry.label ?? '—'),
@@ -692,13 +779,61 @@ async function run() {
     await wait(50)
     item = await openMenu()
     assert.equal(lastMenu[0].label, '顯示貓咪', 'done: nothing about updates at the top')
-    console.log('ok - new versions are asked about first, and come down only after a yes')
+    console.log('ok - new versions are asked about first, with what is new, and come down only after a yes')
+
+    // The Claude cat: Claude Code was asked a moment after the start, and
+    // couldn't tell, so the conversations' reports decide. One running an
+    // older Claude cat has the person asked to have Claude update it.
+    assert.deepEqual(claudeRan, ['plugin list --json'], 'Claude Code asked which Claude cat is installed')
+    report('older-claude-cat', 'working', Date.now(), false, 0, 0, undefined, '1.20.0')
+    notice = await noticeShown('the window asking for the Claude cat')
+    assert.deepEqual(
+      await inNotice(notice, NOTICE_SHOWS),
+      {
+        title: '桌面貓',
+        heading: 'Claude 貓外掛無法自動更新',
+        notes: [],
+        lines: ['把這個連結貼給 Claude，請它幫你更新 Claude 貓外掛：'],
+        link: claudeCat.PLUGIN_PAGE,
+        hint: '更新後，新開的對話就會用新版。',
+        warning: null,
+        versions: `搭配這一版桌面貓的是 ${claudeCat.PAIRED_CLAUDE_CAT}，你現在用的比較舊。`,
+        buttons: ['關閉', '複製連結'],
+        focused: '複製連結',
+        face: 1,
+        tail: 0,
+        moving: 0,
+      },
+      "in the person's words, the link ready to copy",
+    )
+    fs.writeFileSync(path.join(shots, 'claude-cat-window.png'), (await notice.win.webContents.capturePage()).toPNG())
+    pressKey(notice, 'Enter')
+    await waitFor(() => copied.at(-1) === claudeCat.PLUGIN_PAGE, 'the link copied')
+    await waitFor(
+      async () => (await inNotice(notice, "document.querySelector('[data-answer=copy]').textContent")) === '已複製',
+      'the button saying so',
+    )
+    assert.equal(notice.win.isDestroyed(), false, 'the window stays, for the person to paste')
+    pressKey(notice, 'Escape')
+    await waitFor(() => notice.win.isDestroyed(), 'Esc to close it')
+    assert.equal(settingsNow().claudeCatSeenTo, claudeCat.PAIRED_CLAUDE_CAT, 'asked once for this version')
+    report('older-claude-cat', 'working', Date.now(), false, 0, 0, undefined, '1.20.0')
+    await wait(500)
+    assert.equal(openNow(), null, 'and not again')
+    report('older-claude-cat', 'resting', Date.now(), true)
+    console.log('ok - a Claude cat that could not be updated has the person ask Claude, once')
   } else {
     assert.equal(item('自動檢查更新'), undefined, 'no switch in a copy with places')
     autoUpdater.emit('update-available', { version: '999.9.9' })
-    await wait(100)
-    assert.deepEqual([updateWindows, updaterCalls], [[], []], 'never asks, never looks, never downloads')
-    console.log('ok - a copy with places never takes a public version')
+    report('older-claude-cat', 'working', Date.now(), false, 0, 0, undefined, '1.20.0')
+    await wait(500)
+    assert.deepEqual(
+      [openNow(), updaterCalls, claudeRan],
+      [null, [], []],
+      'never asks, never looks, never downloads, never runs Claude Code',
+    )
+    report('older-claude-cat', 'resting', Date.now(), true)
+    console.log('ok - a copy with places never takes a public version, nor touches the Claude cat')
   }
 
   // The Siamese: cream, with soft points and blue eyes.

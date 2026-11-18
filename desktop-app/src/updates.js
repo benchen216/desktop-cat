@@ -21,6 +21,46 @@ const isTimeToLook = (lookedAt, now) =>
 const wasAnswered = error =>
   (typeof error?.code === 'string' && error.code.startsWith('ERR_UPDATER_')) || Number.isInteger(error?.statusCode)
 
+// What's new, as the window shows it: a few short lines at most.
+const MOST_NOTES = 8
+const LONGEST_NOTE = 200
+
+/**
+ * What's new in a version, in the first of `languages` it is written in: the
+ * release notes (build/release-notes.md, which electron-builder puts in
+ * latest.yml) hold one section per language, headed by its tag (## zh-Hant,
+ * ## en), each line of news a list item (- ...). Anything else, such as the
+ * release's page on GitHub that the updater falls back to when latest.yml has
+ * no notes, gives none: the window then shows no list.
+ */
+function notesFor(releaseNotes, languages) {
+  // With every version's notes asked for, the updater gives a list, newest first.
+  const text = Array.isArray(releaseNotes) ? releaseNotes[0]?.note : releaseNotes
+
+  if (typeof text !== 'string') {
+    return []
+  }
+
+  const sections = new Map()
+  let section = null
+
+  for (const line of text.split(/\r?\n/)) {
+    const heading = line.match(/^##\s+(\S+)\s*$/)
+    const item = line.match(/^\s*[-*]\s+(\S.*?)\s*$/)
+
+    if (heading !== null) {
+      section = heading[1].toLowerCase()
+      sections.set(section, sections.get(section) ?? [])
+    } else if (item !== null && section !== null) {
+      sections.get(section).push(item[1].slice(0, LONGEST_NOTE))
+    }
+  }
+
+  const notes = languages.map(language => sections.get(String(language).toLowerCase())).find(found => found?.length > 0)
+
+  return (notes ?? []).slice(0, MOST_NOTES)
+}
+
 /** Whether one version is newer than another, by their numbers: 1.10.0 is newer than 1.9.2. */
 function isNewer(version, than) {
   const numbers = text => String(text).split('-')[0].split('.').map(Number)
@@ -47,7 +87,8 @@ function isNewer(version, than) {
  * `updater` is electron-updater's autoUpdater. `store` keeps what must outlast
  * a restart: when the cat last looked, and the version the person chose to
  * skip. `isOn` says whether looking is allowed now. `ask` shows the person the
- * new version and answers with what they chose: 'install', 'later' or 'skip'.
+ * new version, with its release notes as the updater gives them, and answers
+ * with what they chose: 'install', 'later' or 'skip'.
  */
 function keepUpToDate({
   updater,
@@ -72,7 +113,7 @@ function keepUpToDate({
   // Without a listener an error would end the program; a look that fails is
   // simply tried again later.
   updater.on('error', () => {})
-  updater.on('update-available', info => void offer(info.version))
+  updater.on('update-available', info => void offer(info.version, info.releaseNotes))
   updater.on('update-downloaded', () => {
     // Only ever after the person's yes: the cat closes, quietly, and comes
     // back as the new version.
@@ -83,7 +124,7 @@ function keepUpToDate({
 
   /** Asks the person about a new version, and does as they choose. "Later"
       leaves it for the next day's look, which asks again. */
-  async function offer(newVersion) {
+  async function offer(newVersion, releaseNotes) {
     if (isAsking || isDownloading || !isNewer(newVersion, version) || newVersion === store.get().skippedVersion) {
       return
     }
@@ -92,7 +133,7 @@ function keepUpToDate({
     let answer
 
     try {
-      answer = await ask(newVersion)
+      answer = await ask(newVersion, releaseNotes)
     } catch {
       answer = 'later'
     } finally {
@@ -160,7 +201,9 @@ module.exports = {
   ASK_EVERY_MS,
   DAY_MS,
   FIRST_LOOK_AFTER_MS,
+  MOST_NOTES,
   isNewer,
   isTimeToLook,
   keepUpToDate,
+  notesFor,
 }

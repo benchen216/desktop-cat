@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'"
+    />
+    <title></title>
+    <style>
+      /* The appearance window's paper and coffee-brown ink, with the website's
+         big face at the top, on the soft glows of its donate banner. */
+      :root {
+        --paper: #fffdf8;
+        --paper-2: #f6f0ea;
+        --edge: #e4dad3;
+        --text-1: #4a3d3b;
+        --text-2: #8a7a76;
+        --chosen: #816c6a;
+        --chosen-text: #fffdf8;
+        --hover: #efe6e0;
+        --warn: #c4483e;
+        --band: #ffffff;
+        --glow-pink: #ffdfe0;
+        --glow-lilac: #e7e1f7;
+        --glow-blue: #dbe8f7;
+        --words: 'Microsoft JhengHei UI', 'Microsoft JhengHei', 'PingFang TC', sans-serif;
+        color-scheme: light dark;
+      }
+
+      /* At night: the appearance window's dark paper, the website's night glows. */
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --paper: #34302e;
+          --paper-2: #3d3835;
+          --edge: #4f4744;
+          --text-1: #f4eeea;
+          --text-2: #bdb0aa;
+          --chosen: #c2aca6;
+          --chosen-text: #2e2a28;
+          --hover: #46403c;
+          --warn: #f08a7e;
+          --band: #34302e;
+          --glow-pink: #3b2c42;
+          --glow-lilac: #2d2a48;
+          --glow-blue: #22304a;
+        }
+      }
+
+      html,
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--text-1);
+        font-family: var(--words);
+        user-select: none;
+      }
+
+      /* The big face: its eyes' middle on the anchor, turned 10° about that
+         point, peeking in as on the website's banner. */
+      .band {
+        --face: 420px;
+        --eyes-y: 92px;
+        position: relative;
+        height: 150px;
+        overflow: hidden;
+        background:
+          radial-gradient(40% 90% at 8% 0%, var(--glow-pink), transparent 70%),
+          radial-gradient(40% 90% at 96% 100%, var(--glow-blue), transparent 70%),
+          radial-gradient(35% 80% at 55% 0%, var(--glow-lilac), transparent 70%),
+          var(--band);
+        border-bottom: 1px solid var(--edge);
+      }
+
+      .band svg {
+        position: absolute;
+        left: 50%;
+        top: var(--eyes-y);
+        width: var(--face);
+        height: var(--face);
+        transform-origin: calc(var(--face) * 0.4105) calc(var(--face) * 0.2605);
+        transform: translate(calc(var(--face) * -0.4105), calc(var(--face) * -0.2605)) rotate(10deg);
+        filter: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.28));
+      }
+
+      main {
+        padding: 18px 24px 4px;
+      }
+
+      h1 {
+        margin: 0 0 10px;
+        font: 700 18px/1.4 var(--words);
+      }
+
+      /* No word left alone on a last line. */
+      h1,
+      li,
+      p {
+        text-wrap: pretty;
+      }
+
+      ul {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      /* A coffee dot before each line of news; a line that wraps keeps to the
+         words above it. */
+      li {
+        position: relative;
+        padding-left: 16px;
+        margin: 0 0 6px;
+        font: 400 14px/1.6 var(--words);
+      }
+
+      li::before {
+        content: '';
+        position: absolute;
+        left: 2px;
+        top: 0.72em;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--chosen);
+      }
+
+      p {
+        margin: 0 0 6px;
+        font: 400 14px/1.6 var(--words);
+      }
+
+      .link {
+        margin: 8px 0 10px;
+        padding: 7px 10px;
+        border: 1px solid var(--edge);
+        border-radius: 7px;
+        background: var(--paper-2);
+        font: 400 13px/1.4 'Segoe UI', var(--words);
+        user-select: text;
+        overflow-wrap: anywhere;
+      }
+
+      .hint {
+        color: var(--text-2);
+        font: 400 12.5px/1.6 var(--words);
+      }
+
+      .warn {
+        margin-top: 12px;
+        color: var(--warn);
+        font: 500 13px/1.6 var(--words);
+        text-wrap: balance;
+      }
+
+      .versions {
+        margin-top: 2px;
+        color: var(--text-2);
+        font: 400 12.5px/1.6 var(--words);
+      }
+
+      footer {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 16px 24px 20px;
+      }
+
+      .grow {
+        flex: 1;
+      }
+
+      button {
+        border: 1px solid var(--edge);
+        background: var(--paper-2);
+        color: var(--text-1);
+        font: 500 13px var(--words);
+        padding: 6px 14px;
+        border-radius: 8px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+
+      button:hover {
+        background: var(--hover);
+      }
+
+      /* The ring shows once the person moves between the buttons with Tab;
+         at the start the main button is ready for Enter without one. */
+      button:focus-visible {
+        outline: none;
+      }
+
+      .keys button:focus-visible {
+        outline: 2px solid var(--chosen);
+        outline-offset: 2px;
+      }
+
+      /* Skipping a version sits apart, quiet, as Sparkle has it. */
+      button.quiet {
+        border-color: transparent;
+        background: none;
+        color: var(--text-2);
+        padding-left: 4px;
+        padding-right: 4px;
+      }
+
+      button.quiet:hover {
+        color: var(--text-1);
+      }
+
+      button.main {
+        border-color: var(--chosen);
+        background: var(--chosen);
+        color: var(--chosen-text);
+      }
+
+      button.main:hover {
+        filter: brightness(1.06);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="band" id="band"></div>
+    <main id="main"></main>
+    <footer id="buttons"></footer>
+    <script src="poses.js"></script>
+    <script src="notice.js"></script>
+  </body>
+</html>

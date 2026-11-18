@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
+import type { AgentInfo, EngineInterface, Register, SessionRateLimit } from 'claude-code'
 
 import type { Coat, Cushion, Mood, Place } from '../types'
 import { COATS, CUSHIONS, DEFAULT_COAT, DEFAULT_CUSHION, WORKING_PAW, cushionColours, posesOn } from './cats'
@@ -132,6 +132,7 @@ const sayNow = async ($: EngineInterface) => textIn(await read($, language))
 const POSES = {
   resting: { pose: 'RESTING', alt: 'A cat asleep on its cushion' },
   waiting: { pose: 'WAITING', alt: 'A cat with its ears up, waiting' },
+  delegating: { pose: 'WAITING', alt: 'A cat with its ears up, waiting on its helpers' },
   calling: { pose: 'CALLING', alt: 'A cat looking at you and tapping the table' },
   thinking: { pose: 'THINKING', alt: 'A cat looking up, lost in thought' },
   working: { pose: 'WORKING', alt: 'A cat tapping at a keyboard' },
@@ -187,17 +188,47 @@ let movedOn = false
 let callsAgain = true
 // This turn left a question in the next-step box.
 let asksAtEnd = false
+// When the desktop cat was last told how this conversation is.
+let reportedAt = 0
+// While the cat waits on helpers: when it first saw them all done.
+let helpersGoneAt = 0
+
+// The desktop cat knows six moods, and draws a conversation whose helpers are
+// still at work as one waiting: ears up, the same pose as the pane cat's.
+const forDesktopCat = (said: Mood) => (said === 'delegating' ? 'waiting' : said)
+
+// This Claude cat's own version, read once from its manifest.
+let ownVersion: Promise<string | null> | undefined
+
+/** This Claude cat's version, as its plugin.json states it, so the desktop cat
+    can tell a Claude cat older than the one it goes with. null when the
+    manifest can't be read: the desktop cat then can't tell, and says nothing. */
+function versionOf($: EngineInterface) {
+  ownVersion ??= $.fs
+    .read(`${$.plugin.root}/.claude-plugin/plugin.json`)
+    .then(text => {
+      const { version } = JSON.parse(text) as { version?: unknown }
+
+      return typeof version === 'string' ? version : null
+    })
+    .catch(() => null)
+
+  return ownVersion
+}
 
 /** One file per conversation, for the desktop cat to read. */
 async function report($: EngineInterface, next: Mood, ended: boolean) {
   const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
 
   if (home !== undefined) {
+    const now = await $.clock.now()
+
+    reportedAt = now
     await $.fs.write(
       `${home}/.desktop-cat/sessions/${await $.session.id()}.json`,
       JSON.stringify({
-        mood: next,
-        updatedAt: await $.clock.now(),
+        mood: forDesktopCat(next),
+        updatedAt: now,
         ended,
         calledAt,
         callsAgain,
@@ -208,6 +239,8 @@ async function report($: EngineInterface, next: Mood, ended: boolean) {
         // them here. The app sets it for the conversations it runs; a terminal
         // has none.
         appSession: await $.env.get('CLAUDE_CODE_HOST_SESSION_ID'),
+        // Claude cats before 1.21.0 never said.
+        pluginVersion: await versionOf($),
       }),
     )
   }
@@ -295,6 +328,63 @@ function callOut($: EngineInterface) {
       await report($, shown ?? 'working', false)
     })
     .catch(() => {})
+}
+
+// The conversation's turn can end while helpers it sent off work on in the
+// background. The cat then waits on them, ears up, rather than sleeping, so
+// nobody takes the work for done. A teammate idle between messages is not at
+// work, nor is a helper that ended; and a command left running (a dev server,
+// say) is no helper at all, or the cat would never sleep.
+const AT_WORK: ReadonlySet<AgentInfo['status']> = new Set(['pending', 'running', 'waiting'])
+// The last helper's end usually wakes the conversation within moments: the cat
+// waits this long before it sleeps, rather than nodding off in between.
+const HELPERS_GONE_MS = 5000
+// The desktop cat stops counting a conversation it has not heard from in half
+// an hour: while helpers work on, it hears again well before then.
+const STILL_HERE_MS = 10 * 60 * 1000
+
+/** Is a helper the conversation sent off still at work? A plugin's own agent
+    (an observer, say) is not one the person waits on. */
+async function helpersAtWork($: EngineInterface) {
+  const agents = await $.agent.list()
+
+  return agents.some(agent => agent.spawnedBy === undefined && AT_WORK.has(agent.status))
+}
+
+/** The turn is over and its helpers' work is not: the cat waits on them, and
+    does not meow, as nothing is done yet. */
+function waitOnHelpers($: EngineInterface) {
+  helpersGoneAt = 0
+  become($, 'delegating')
+}
+
+/** While the cat waits on helpers: it sleeps a little after the last is done,
+    should nothing wake the conversation (a helper stopped, say), and keeps the
+    desktop cat hearing of it till then. */
+async function checkHelpers($: EngineInterface) {
+  if (shown !== 'delegating') {
+    return
+  }
+
+  const atWork = await helpersAtWork($)
+  const now = await $.clock.now()
+
+  // A turn may have begun meanwhile.
+  if (shown !== 'delegating') {
+    return
+  }
+
+  if (atWork) {
+    helpersGoneAt = 0
+
+    if (now - reportedAt >= STILL_HERE_MS) {
+      reportAgain($)
+    }
+  } else if (helpersGoneAt === 0) {
+    helpersGoneAt = now
+  } else if (now - helpersGoneAt >= HELPERS_GONE_MS) {
+    become($, 'resting')
+  }
 }
 
 // The windows the cans beside the desktop cat show: this meal, and the week's food.
@@ -391,6 +481,7 @@ export const register: Register = on => {
     $.clock.every(PRAISE_CHECK_MS, () => {
       void checkPraise($).catch(() => {})
       void followDesktopCat($).catch(() => {})
+      void checkHelpers($).catch(() => {})
     })
     await $.tool.register({ name: 'feel_sad', description: SAD_DESCRIPTION, isDeferred: false })
 
@@ -540,13 +631,16 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('turn.complete', ($, e, next) => {
+  on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined) {
       const asked = asksAtEnd
       asksAtEnd = false
 
       if (asked && e.reason === 'answer') {
         askInTheBox($)
+      } else if (await helpersAtWork($).catch(() => false)) {
+        // The meow comes when the conversation, woken by its helpers, answers.
+        waitOnHelpers($)
       } else {
         become($, 'resting')
 

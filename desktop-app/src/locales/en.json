@@ -1,6 +1,7 @@
 {
   "app": {
-    "name": "Desktop Cat"
+    "name": "Desktop Cat",
+    "devName": "Desktop Cat Dev"
   },
   "menu": {
     "showCat": "Show cat",
@@ -18,11 +19,20 @@
   },
   "update": {
     "title": "A new version of Desktop Cat is available",
-    "versions": "Desktop Cat {{version}} is available (you have {{current}}). Would you like to update now?",
+    "versions": "Version {{version}} (you have {{current}})",
     "overwrites": "If you've changed Desktop Cat's code yourself, updating will overwrite your changes.",
     "skip": "Skip this version",
     "later": "Remind me later",
     "install": "Install update"
+  },
+  "claudeCat": {
+    "title": "Couldn't update the Claude Code plugin",
+    "paste": "Paste this link into Claude and ask it to update the plugin:",
+    "after": "New conversations will use the new version.",
+    "paired": "This version of Desktop Cat goes with plugin {{version}}. You're using an older one.",
+    "copy": "Copy link",
+    "copied": "Copied",
+    "close": "Close"
   },
   "language": {
     "system": "Use system setting",

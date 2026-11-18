@@ -3,7 +3,6 @@ const {
   BrowserWindow,
   Menu,
   Tray,
-  dialog,
   ipcMain,
   nativeImage,
   nativeTheme,
@@ -14,10 +13,12 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 
-const { chatToOpen, hasNewCall, isTimeToCallAgain, pickMood, readSessions, wantsCallAgain } = require('./mood')
+const { ACTIVE_FOR_MS, chatToOpen, hasNewCall, isTimeToCallAgain, pickMood, readSessions, wantsCallAgain } = require('./mood')
 const { autoUpdater } = require('electron-updater')
-const { TAKES_PUBLIC_VERSIONS } = require('./edition')
-const { keepUpToDate } = require('./updates')
+const { DEV_BUILD, TAKES_PUBLIC_VERSIONS } = require('./edition')
+const { keepUpToDate, notesFor } = require('./updates')
+const { PAIRED_CLAUDE_CAT, PLUGIN_PAGE, careForClaudeCat } = require('./claude-cat')
+const { connectNotices, showNotice } = require('./notices')
 const {
   clearOldPraise,
   createPraiseBox,
@@ -42,7 +43,16 @@ const {
 } = require('./prefs')
 const { cansOf, levelOf, readUsage, usageLeft } = require('./usage')
 // Every word the cat shows comes from the tables in src/locales.
-const { chosenLanguage, currentLanguage, languagesOffered, startText, t, textForWindows, useLanguage } = require('./i18n')
+const {
+  FALLBACKS,
+  chosenLanguage,
+  currentLanguage,
+  languagesOffered,
+  startText,
+  t,
+  textForWindows,
+  useLanguage,
+} = require('./i18n')
 
 const SESSIONS_DIR =
   process.env.DESKTOP_CAT_SESSIONS_DIR ??
@@ -84,6 +94,9 @@ const DEFAULTS = {
   // When it last looked, and the version the person chose to skip.
   updateLookedAt: 0,
   updateSkipped: null,
+  // The Claude cat version last seen to: brought up to it, or the person
+  // asked to have Claude update it (src/claude-cat.js).
+  claudeCatSeenTo: null,
 }
 const REFRESH_EVERY_MS = 5000
 const AFTER_CHANGE_MS = 60
@@ -117,6 +130,8 @@ let isOverlayReady = false
 let tray = null
 // Looks for new versions and puts them in (src/updates.js).
 let updates = null
+// Keeps the Claude cat up to date with this one (src/claude-cat.js).
+let claudeCat = null
 let settings = { ...DEFAULTS }
 let dragOffset = null
 let shownMood = null
@@ -268,26 +283,83 @@ function setAutoUpdate(isOn) {
   }
 }
 
-// The person's choices in the window that tells of a new version, in its
-// buttons' order: as Sparkle and WinSparkle ask it, the yes on the right.
-const UPDATE_ANSWERS = ['skip', 'later', 'install']
+/** What every notice window starts with: its title, the language its words
+    are in, and the cat's coat for the face at its top. */
+const noticeBase = () => ({
+  windowTitle: t('app.name'),
+  language: currentLanguage(),
+  coat: coatOf(readPrefs(PREFS_FILE)),
+})
 
-/** Tells the person of a new version, in Windows' own window, and answers
-    with what they chose. Closing the window is "later". */
-async function askToUpdate(newVersion) {
-  const { response } = await dialog.showMessageBox({
-    type: 'info',
-    title: t('app.name'),
-    message: t('update.title'),
-    detail: `${t('update.versions', { version: newVersion, current: app.getVersion() })}\n\n${t('update.overwrites')}`,
-    buttons: UPDATE_ANSWERS.map(answer => t(`update.${answer}`)),
-    defaultId: UPDATE_ANSWERS.indexOf('install'),
-    cancelId: UPDATE_ANSWERS.indexOf('later'),
-    // Plain buttons, not Windows' larger links.
-    noLink: true,
+/** Tells the person of a new version, in the cat's own window, and answers
+    with what they chose: what's new first, the versions last. Closing the
+    window is "later". The buttons as Sparkle and WinSparkle have them:
+    skipping apart on the left, the yes on the right. */
+function askToUpdate(newVersion, releaseNotes) {
+  return showNotice({
+    ...noticeBase(),
+    title: t('update.title'),
+    notes: notesFor(releaseNotes, [currentLanguage(), ...FALLBACKS]),
+    warning: t('update.overwrites'),
+    versions: t('update.versions', { version: newVersion, current: app.getVersion() }),
+    buttons: [
+      { id: 'skip', label: t('update.skip'), look: 'quiet' },
+      { id: 'later', label: t('update.later'), look: 'plain' },
+      { id: 'install', label: t('update.install'), look: 'main' },
+    ],
+    cancel: 'later',
   })
+}
 
-  return UPDATE_ANSWERS[response] ?? 'later'
+/** Asks the person to have Claude update the Claude cat, when the desktop
+    cat couldn't: the link to give Claude, ready to copy. Answers whether it
+    asked; not while a new desktop cat is on its way down, which will see to
+    it itself. */
+async function askForClaudeCat() {
+  const isWanted = () => !updates?.isDownloading()
+
+  if (!isWanted()) {
+    return false
+  }
+
+  const answer = await showNotice(
+    {
+      ...noticeBase(),
+      title: t('claudeCat.title'),
+      lines: [t('claudeCat.paste')],
+      link: PLUGIN_PAGE,
+      hint: t('claudeCat.after'),
+      versions: t('claudeCat.paired', { version: PAIRED_CLAUDE_CAT }),
+      buttons: [
+        { id: 'close', label: t('claudeCat.close'), look: 'plain' },
+        { id: 'copy', label: t('claudeCat.copy'), done: t('claudeCat.copied'), look: 'main' },
+      ],
+      cancel: 'close',
+    },
+    { stillWanted: isWanted },
+  )
+
+  return answer !== null
+}
+
+/** Keeps the Claude cat up to date with this one, in the copy that takes the
+    public versions: the one it pairs with is the public plugin. */
+function startClaudeCatCare() {
+  if (!TAKES_PUBLIC_VERSIONS) {
+    return
+  }
+
+  claudeCat = careForClaudeCat({
+    activeForMs: ACTIVE_FOR_MS,
+    remind: askForClaudeCat,
+    store: {
+      get: () => settings.claudeCatSeenTo,
+      set: version => {
+        settings.claudeCatSeenTo = version
+        saveSettings()
+      },
+    },
+  })
 }
 
 /** Starts looking for new versions, once a day, if the menu allows it. Only
@@ -613,7 +685,7 @@ function globeIcon() {
 async function setLanguage(language) {
   writePrefs(PREFS_FILE, { language })
   await useLanguage({ asked: language, preferred: app.getPreferredSystemLanguages() })
-  tray?.setToolTip(t('app.name'))
+  tray?.setToolTip(trayName())
 
   for (const shown of [win, overlay]) {
     if (shown !== null && !shown.isDestroyed()) {
@@ -762,6 +834,8 @@ function refreshMood() {
 
   // A fill time passing changes the cans with no file written: look each time.
   refreshCans(now)
+  // A conversation running an older Claude cat, when no Claude Code could say.
+  claudeCat?.reportsSay(sessions, now)
 
   if (mood !== shownMood) {
     shownMood = mood
@@ -992,11 +1066,21 @@ function connectCat() {
   )
 }
 
+/** The tray's picture: the development copy wears its own, so the two copies
+    are told apart; the usual one if its own is missing. */
+function trayIcon() {
+  const usual = path.join(__dirname, '..', 'assets', 'tray.png')
+  const own = path.join(__dirname, '..', 'assets', 'tray-dev.png')
+
+  return nativeImage.createFromPath(DEV_BUILD && fs.existsSync(own) ? own : usual)
+}
+
+/** What the tray says under the pointer: the development copy says so. */
+const trayName = () => t(DEV_BUILD ? 'app.devName' : 'app.name')
+
 function createTray() {
-  tray = new Tray(
-    nativeImage.createFromPath(path.join(__dirname, '..', 'assets', 'tray.png')),
-  )
-  tray.setToolTip(t('app.name'))
+  tray = new Tray(trayIcon())
+  tray.setToolTip(trayName())
   const openMenu = () => tray.popUpContextMenu(buildMenu())
   tray.on('click', openMenu)
   tray.on('right-click', openMenu)
@@ -1008,10 +1092,12 @@ function start() {
   clearOldPraise(INBOX_DIR, Date.now())
   loadSettings()
   connectCat()
+  connectNotices()
   createWindow()
   createTray()
   watchSessions()
   startUpdates()
+  startClaudeCatCare()
 
   // The folder may have moved since this was turned on.
   if (settings.openAtLogin && app.isPackaged) {

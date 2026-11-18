@@ -23,6 +23,7 @@ export const TABLES: Readonly<Record<string, Table>> = {
     pose: {
       resting: '休息中',
       waiting: '等待中',
+      delegating: '助手做事中',
       calling: '等你回應',
       thinking: '思考中',
       working: '做事中',
@@ -56,6 +57,7 @@ export const TABLES: Readonly<Record<string, Table>> = {
     pose: {
       resting: 'Napping',
       waiting: 'Waiting',
+      delegating: 'Helpers at work',
       calling: 'Your turn',
       thinking: 'Thinking',
       working: 'Working',
