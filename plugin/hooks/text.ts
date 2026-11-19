@@ -41,6 +41,15 @@ export const TABLES: Readonly<Record<string, Table>> = {
       praise: '（摸摸頭 ×{{count}}）做得很好！',
       comfort: '（摸摸頭 ×{{count}}）不要難過了。',
     },
+    // The row above the prompt while the conversation waits on the person.
+    remind: {
+      label: '稍後提醒我',
+      in15: '15 分鐘',
+      in30: '30 分鐘',
+      in60: '1 小時',
+      setFor: '將在 {{time}} 提醒你',
+      cancel: '取消',
+    },
     // What Claude Code's list of commands says of each.
     command: {
       cat: 'Open the pane with the cat beside the chat',
@@ -74,6 +83,14 @@ export const TABLES: Readonly<Record<string, Table>> = {
     pat: {
       praise: '(head pat ×{{count}}) Good job!',
       comfort: "(head pat ×{{count}}) It's okay.",
+    },
+    remind: {
+      label: 'Remind me later',
+      in15: 'In 15 minutes',
+      in30: 'In 30 minutes',
+      in60: 'In 1 hour',
+      setFor: 'Reminder set for {{time}}',
+      cancel: 'Cancel',
     },
     command: {
       cat: 'Open the cat pane beside the chat',

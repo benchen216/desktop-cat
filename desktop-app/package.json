@@ -1,7 +1,7 @@
 {
   "name": "desktop-cat",
   "productName": "DesktopCat",
-  "version": "1.28.0",
+  "version": "1.29.0",
   "private": true,
   "description": "A cat on the desktop that follows what Claude is doing in every conversation",
   "license": "MIT",

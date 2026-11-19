@@ -13,6 +13,7 @@ A cat that lives on your Windows desktop and follows what Claude Code is doing i
 - 跟著 Claude 換姿勢：等待、思考（雲朵裡輪流出現小宇宙、問號、魚和符號）、做事、講話、打瞌睡、睡覺
 - Claude 需要你允許、或問你問題時，喵一聲，看著你、伸出一隻前腳輕點桌面等你回應，旁邊的對話框裡有個肉球跟著壓；一直沒人回應的話，每 3 分鐘再喵一聲。做完事時也喵一聲叫你
 - 貓伸手等你回應時，點一下牠就會跳到那個對話（Claude 桌面版 App）
+- 稍後提醒我：Claude 等你回應時，輸入框上方會多一排貓掌按鈕，選 15 分鐘、30 分鐘或 1 小時，貓先安靜，時間到再叫你（Claude 桌面版 App）
 - 摸頭會呼嚕，Claude 會收到一句「（摸摸頭 ×N）做得很好！」
 - 抓住身體拖曳時，牠會像果凍一樣晃動，被抓起時小小喵一聲
 - 你對 Claude 不滿意時，牠會垂頭難過，摸摸頭可以安慰牠
@@ -77,6 +78,7 @@ npm run package
 - Changes pose with Claude: waiting, thinking (a tiny universe, question marks, fish and symbols take turns in its cloud), working, replying, dozing and sleeping
 - When Claude needs your permission or asks you something, it meows, looks at you and gently taps the desktop with one paw until you answer, while a paw print stamps along in the speech bubble beside it. If nobody answers, it meows again every 3 minutes. It also meows when the work is done
 - When it's waiting for you, click the cat to jump to that conversation (in the Claude desktop app)
+- Remind me later: when Claude is waiting for you, a row with a paw print above the message box lets you choose 15 minutes, 30 minutes, or 1 hour; the cat stays quiet and calls you again then (in the Claude desktop app)
 - Pat its head and it purrs, and Claude receives "(head pat ×N) Good job!"
 - Drag it by its body and it wobbles like jelly, with a little mew when you pick it up
 - When you're unhappy with Claude, it hangs its head; a head pat cheers it up

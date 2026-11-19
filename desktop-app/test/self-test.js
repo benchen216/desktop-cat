@@ -610,6 +610,73 @@ async function run() {
   assert.ok(item('離開'), 'this computer is set to Chinese: Chinese again')
   console.log('ok - the language menu changes the words at once, and gives the choice back to the computer')
 
+  // Put off from its conversation (the Claude cat's row above the prompt
+  // writes the time in the report), a conversation waiting on the person is
+  // left quiet till then; the cat calls again at that time, on its own clock.
+  const HOUR = 60 * 60 * 1000
+  const reportAsking = fields =>
+    fs.writeFileSync(
+      path.join(sessions, 'asking.json'),
+      JSON.stringify({
+        mood: 'calling',
+        updatedAt: Date.now(),
+        ended: false,
+        calledAt: Date.now(),
+        sadAt: 0,
+        movedOn: false,
+        appSession: 'local_cat-test-1',
+        pluginVersion: claudeCat.PAIRED_CLAUDE_CAT,
+        ...fields,
+      }),
+    )
+  const moodBeforeAsking = await mood()
+  reportAsking({})
+  await expectMood('calling', 'a question waiting on the person')
+  reportAsking({ remindAt: Date.now() + HOUR })
+  await expectMood(moodBeforeAsking, 'put off in its conversation, the cat goes back to what else is going on')
+  await waitFor(async () => !(await opensChat()), 'nothing for a click to open meanwhile')
+  item = await openMenu()
+  assert.equal(lastMenu[0].label, '顯示貓咪', 'the reminder is set in the conversation: nothing about it in the menu')
+  console.log('ok - put off in its conversation, a waiting conversation is left quiet')
+
+  // The hour passes: the clock the program reads is put forward, here only.
+  let meowsSent = 0
+  const realSend = page.send
+  page.send = function send(channel, ...rest) {
+    meowsSent += channel === 'cat:meow' ? 1 : 0
+    return realSend.call(this, channel, ...rest)
+  }
+  const realNow = Date.now
+  Date.now = () => realNow() + HOUR + 60 * 1000
+  try {
+    await waitFor(async () => (await mood()) === 'calling', 'the cat to call again at the time chosen', 8000)
+    await waitFor(() => meowsSent === 1, 'a meow with it')
+    await waitFor(opensChat, 'a click on the cat to open the conversation again')
+    const openedBefore = openedPages.length
+    tap(SPOTS.chest)
+    await waitFor(() => openedPages.length === openedBefore + 1, 'the conversation to open')
+    assert.equal(openedPages.at(-1), LINK)
+  } finally {
+    Date.now = realNow
+    page.send = realSend
+  }
+  page.sendInputEvent({ type: 'mouseMove', x: 1, y: 1 })
+  await waitFor(async () => (await inPage('document.body.dataset.over')) === 'false', 'hover to leave')
+  console.log('ok - at the time chosen the cat calls again with a meow, and a click opens the conversation')
+
+  // Back before the hour: quiet again, till the conversation takes it back or is answered.
+  await waitFor(async () => (await mood()) === moodBeforeAsking, 'the cat quiet again before the time', 8000)
+  reportAsking({ remindAt: 0 })
+  await expectMood('calling', 'taken back in the conversation, the cat calls as before')
+  reportAsking({ remindAt: Date.now() + HOUR })
+  await expectMood(moodBeforeAsking, 'put off once more')
+  reportAsking({ mood: 'working', remindAt: 0 })
+  await expectMood('working', 'answered meanwhile')
+  reportAsking({ mood: 'resting', ended: true })
+  await expectMood(moodBeforeAsking, 'the conversation over')
+  item = await openMenu()
+  console.log('ok - a reminder taken back in the conversation, or its answer, has the cat follow at once')
+
   item('外觀設定').click()
   await waitFor(() => BrowserWindow.getAllWindows().length === 2, 'the appearance window')
   const look = BrowserWindow.getAllWindows().find(other => other !== win)

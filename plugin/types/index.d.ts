@@ -19,6 +19,9 @@ declare module 'claude-code' {
       cushion: Cushion
       place: Place
       language: Language
+      // When the desktop cat is to call the person again for this
+      // conversation, which they put off; 0 when they did not.
+      remindAt: number
     }
   }
 }

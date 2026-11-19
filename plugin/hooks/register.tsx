@@ -2,7 +2,17 @@ import { atom, read, update } from 'claude-code'
 import type { AgentInfo, EngineInterface, Register, SessionRateLimit } from 'claude-code'
 
 import type { Coat, Cushion, Mood, Place } from '../types'
-import { COATS, CUSHIONS, DEFAULT_COAT, DEFAULT_CUSHION, WORKING_PAW, cushionColours, posesOn } from './cats'
+import {
+  COATS,
+  CUSHIONS,
+  DEFAULT_COAT,
+  DEFAULT_CUSHION,
+  PAW_PINK,
+  PAW_PRINT,
+  WORKING_PAW,
+  cushionColours,
+  posesOn,
+} from './cats'
 import { PLACE_ART } from './place-art'
 import type { PlaceName } from './place-art'
 import { SOURCE, TABLES, pickLanguage, systemLanguages, textIn } from './text'
@@ -125,6 +135,8 @@ const coat = atom({ plugin: 'desktop-cat', key: 'coat' } as const, DEFAULT_COAT 
 const cushion = atom({ plugin: 'desktop-cat', key: 'cushion' } as const, DEFAULT_CUSHION as Cushion)
 const place = atom({ plugin: 'desktop-cat', key: 'place' } as const, NO_PLACE as Place)
 const language = atom({ plugin: 'desktop-cat', key: 'language' } as const, SOURCE as string)
+// The time a waiting conversation is put off till, for the row above the prompt to draw.
+const reminder = atom({ plugin: 'desktop-cat', key: 'remindAt' } as const, 0)
 /** The words in the language the cats speak, as last read from the desktop cat's choices. */
 const sayNow = async ($: EngineInterface) => textIn(await read($, language))
 
@@ -186,8 +198,17 @@ let movedOn = false
 // few minutes: yes for a card that holds the work up, no for a question left
 // in the next-step box, which is seldom urgent and comes at many a turn's end.
 let callsAgain = true
+// When the desktop cat is to call the person again for this conversation,
+// which they put off from the row above the prompt; 0 when they did not.
+let remindAt = 0
 // This turn left a question in the next-step box.
 let asksAtEnd = false
+// The person said something while the turn ran: the conversation reads it at
+// its next step.
+let saidMeanwhile = false
+// Whose words are the person's own, however they reached the conversation:
+// typed here, sent from their phone, or a button of theirs pressed.
+const FROM_THE_PERSON: ReadonlySet<string> = new Set(['composer', 'bridge', 'auto-continuation'])
 // When the desktop cat was last told how this conversation is.
 let reportedAt = 0
 // While the cat waits on helpers: when it first saw them all done.
@@ -231,7 +252,10 @@ async function report($: EngineInterface, next: Mood, ended: boolean) {
         updatedAt: now,
         ended,
         calledAt,
-        callsAgain,
+        // Asked for only through a call's first half hour: a conversation left
+        // waiting for hours keeps the cat's paw out, not its voice.
+        callsAgain: callsAgain && (calledAt === 0 || now - calledAt < MEOWS_AGAIN_FOR_MS),
+        remindAt,
         sadAt,
         movedOn,
         // The Claude desktop app's own id for this conversation, which its
@@ -298,6 +322,9 @@ function askThePerson($: EngineInterface) {
 // The Claude desktop app's next-step box. A turn can end on a question there,
 // in its `ask`: no card, but the person's answer is awaited all the same.
 const NEXT_STEP_BOX = 'mcp__ccd_turn__wrap_up'
+// The app's tools for the turn's own bookkeeping, the box among them: its task
+// list is often updated beside the box, and is not work on the task.
+const TURN_BOOKKEEPING = 'mcp__ccd_turn__'
 
 /** Did this call leave a question in the next-step box? */
 const asksInTheBox = (e: object) => {
@@ -328,6 +355,105 @@ function callOut($: EngineInterface) {
       await report($, shown ?? 'working', false)
     })
     .catch(() => {})
+}
+
+// The desktop cat stops counting a conversation it has not heard from in half
+// an hour, taking it for closed. One that waits on the person is still there:
+// it says so every few minutes, the cat keeps its paw out however long the
+// person is away, and the meow every few minutes ends with the first half hour.
+const MEOWS_AGAIN_FOR_MS = 30 * 60 * 1000
+
+/** While the conversation waits on the person, the desktop cat keeps hearing of it. */
+async function checkWaiting($: EngineInterface) {
+  if (shown !== 'calling') {
+    return
+  }
+
+  const now = await $.clock.now()
+
+  if (shown === 'calling' && now - reportedAt >= STILL_HERE_MS) {
+    reportAgain($)
+  }
+}
+
+// How long the person can put a waiting conversation off for, from the row
+// above the prompt: each is named in the tables (remind.in15 and so on).
+const REMIND_IN = [
+  { id: 'in15', minutes: 15 },
+  { id: 'in30', minutes: 30 },
+  { id: 'in60', minutes: 60 },
+] as const
+
+// The cat's own mark at the start of its row, so the row is seen to be the
+// cat's and not the app's: the paw print of the working row, standing still.
+const ROW_PAW_ALT = 'A pink paw print'
+const ROW_PAW_SIZE = 16
+// The desktop app stands a picture in a row on the words' baseline, its foot
+// on the line the words stand on, rather than centring it; a taller picture
+// pushes the words down with it. The words' ink fills the 11 to 12 pixels just
+// above that line (her screenshots of 2026-11-19), while the paw print's ink
+// fills the middle three quarters of its square, which set it 3 px above the
+// words. So the square stays 16 px, and the paw stands on its foot, a little
+// smaller, as tall as the words: its lowest point (y 87.5) to the bottom edge.
+const ROW_PAW = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="${PAW_PINK}"><g transform="translate(50 100) scale(.92) translate(-50 -87.5)">${PAW_PRINT}</g></svg>`
+// The row's words in the cat's rose brown: the band and the buttons are the
+// app's own (a desktop draws its native button from the label, whatever colour
+// is asked of its words), and these tell the row is the cat's. A row cannot
+// tell a light app from a dark one, so the one colour must read on both. Her
+// pick of the looks tried on 2026-11-19.
+const ROW_WORDS = '#A0766F'
+
+/** An hour and minute as the language writes them: 下午3:30, 3:30 PM. */
+const timeOfDay = (at: number, inLanguage: string) =>
+  new Intl.DateTimeFormat(inLanguage, { hour: 'numeric', minute: '2-digit' }).format(at)
+
+/** The person has read what is asked and would rather come back to it: the
+    desktop cat is quiet about this conversation till then, and calls them
+    again at that time. */
+async function remindLater($: EngineInterface, minutes: number) {
+  const at = (await $.clock.now()) + minutes * 60 * 1000
+
+  // Answered meanwhile: nothing is left to put off.
+  if (shown !== 'calling') {
+    return
+  }
+
+  remindAt = at
+  await update($, reminder, () => at)
+  reportAgain($)
+}
+
+/** No reminder any longer: answered, taken back, or its time has come. */
+function forgetReminder($: EngineInterface) {
+  if (remindAt !== 0) {
+    remindAt = 0
+    void update($, reminder, () => 0)
+  }
+}
+
+/** The person takes the reminder back: the desktop cat calls as before. */
+function takeBackReminder($: EngineInterface) {
+  if (remindAt !== 0) {
+    forgetReminder($)
+    reportAgain($)
+  }
+}
+
+/** The time the person asked for has come: the conversation calls them again
+    as of that time, the very moment a desktop cat keeping the time itself
+    began to call, so it meows once. */
+async function checkReminder($: EngineInterface) {
+  if (remindAt === 0) {
+    return
+  }
+
+  const now = await $.clock.now()
+
+  if (remindAt !== 0 && now >= remindAt) {
+    calledAt = remindAt
+    forgetReminder($)
+    reportAgain($)
+  }
 }
 
 // The conversation's turn can end while helpers it sent off work on in the
@@ -464,6 +590,12 @@ function become($: EngineInterface, next: Mood) {
   if (shown !== next) {
     shown = next
     void update($, mood, () => next)
+
+    // Answered, or on to something else: nothing is put off any longer.
+    if (next !== 'calling') {
+      forgetReminder($)
+    }
+
     // In order, so a slow write cannot leave an older mood as the last word.
     // A failed report only leaves the desktop cat a step behind.
     reporting = reporting.then(() => report($, next, false)).catch(() => {})
@@ -475,6 +607,8 @@ export const register: Register = on => {
     // The shared choices first, the language among them, so the commands
     // are described in it.
     await followDesktopCat($).catch(() => {})
+    // What the row above the prompt draws is what this run of the cat knows.
+    await update($, reminder, () => remindAt)
     const say = await sayNow($)
     await $.command.register({ name: 'cat', description: say('command.cat') })
     await $.command.register({ name: 'cat-voice', description: say('command.catVoice') })
@@ -482,6 +616,8 @@ export const register: Register = on => {
       void checkPraise($).catch(() => {})
       void followDesktopCat($).catch(() => {})
       void checkHelpers($).catch(() => {})
+      void checkReminder($).catch(() => {})
+      void checkWaiting($).catch(() => {})
     })
     await $.tool.register({ name: 'feel_sad', description: SAD_DESCRIPTION, isDeferred: false })
 
@@ -491,6 +627,11 @@ export const register: Register = on => {
   on('prompt.submit', ($, e, next) => {
     if (e.command === undefined && e.isMeta === undefined) {
       cheerUp($)
+
+      // Said while a turn runs, not to start one.
+      if (e.turnId !== undefined && FROM_THE_PERSON.has(e.origin.kind)) {
+        saidMeanwhile = true
+      }
     }
 
     return next(e)
@@ -572,6 +713,14 @@ export const register: Register = on => {
       return yield* next(e)
     }
 
+    // What the person said while the last step ran is read now. A question
+    // put in the box before that was put without knowing it, and no longer
+    // stands; one put from here on does.
+    if (saidMeanwhile) {
+      saidMeanwhile = false
+      asksAtEnd = false
+    }
+
     become($, 'waiting')
 
     for await (const chunk of next(e)) {
@@ -594,9 +743,15 @@ export const register: Register = on => {
       become($, 'working')
       getToWork($)
 
-      // Its last call wins: the box is filled once, as the turn ends.
-      if ('tool' in e && e.tool === NEXT_STEP_BOX) {
+      // A question in the box waits on the person only if the turn ends on
+      // it. Work after the box means the turn went on, as when the person's
+      // answer arrived while it ran: nothing is being asked by its end.
+      const tool = 'tool' in e && typeof e.tool === 'string' ? e.tool : ''
+
+      if (tool === NEXT_STEP_BOX) {
         asksAtEnd = asksInTheBox(e)
+      } else if (!tool.startsWith(TURN_BOOKKEEPING)) {
+        asksAtEnd = false
       }
     }
 
@@ -633,8 +788,11 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined) {
-      const asked = asksAtEnd
+      // Said during the turn's last step: the person has spoken already, and
+      // their words start the next turn at once.
+      const asked = asksAtEnd && !saidMeanwhile
       asksAtEnd = false
+      saidMeanwhile = false
 
       if (asked && e.reason === 'answer') {
         askInTheBox($)
@@ -680,6 +838,43 @@ export const register: Register = on => {
           isInteractive
         />
         <Text dimColor>{pose.label}</Text>
+      </Box>
+    )
+  })
+
+  // While the conversation waits on the person, a row above the prompt lets
+  // them put it off: by then they have read what is asked, here, which the
+  // desktop cat could not know. Each conversation has its own.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.surface === 'terminal' || e.props.hasSurvey || (await read($, mood)) !== 'calling') {
+      return next(e)
+    }
+
+    const say = await sayNow($)
+    const at = await read($, reminder)
+    const { Box, Button, Svg, Text } = $.ui.resolve(e)
+    const paw = <Svg source={ROW_PAW} alt={ROW_PAW_ALT} width={ROW_PAW_SIZE} height={ROW_PAW_SIZE} />
+    const button = (key: string, label: string, onPress: () => void) => (
+      <Button key={key} label={label} onPress={onPress} />
+    )
+
+    if (at !== 0) {
+      return (
+        <Box flexDirection="row" alignItems="center" gap="sm">
+          {paw}
+          <Text color={ROW_WORDS}>{say('remind.setFor', { time: timeOfDay(at, await read($, language)) })}</Text>
+          {button('remind-cancel', say('remind.cancel'), () => takeBackReminder($))}
+        </Box>
+      )
+    }
+
+    return (
+      <Box flexDirection="row" alignItems="center" gap="sm">
+        {paw}
+        <Text color={ROW_WORDS}>{say('remind.label')}</Text>
+        {REMIND_IN.map(wait =>
+          button(`remind-${wait.id}`, say(`remind.${wait.id}`), () => void remindLater($, wait.minutes)),
+        )}
       </Box>
     )
   })

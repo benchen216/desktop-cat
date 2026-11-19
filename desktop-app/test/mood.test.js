@@ -16,6 +16,7 @@ const {
   pickMood,
   readSessions,
   wantsCallAgain,
+  withReminder,
 } = require('../src/mood')
 
 const NOW = 1_000_000_000
@@ -126,7 +127,7 @@ test('reading clears what is over and survives a half-written file', () => {
   // A report with no word on meowing again is an older Claude cat's: it wants
   // it. One with no word of the Claude app has nothing there to open. One with
   // no version is from a Claude cat before 1.21.0, which never said.
-  const calm = { ended: false, callsAgain: true, appSession: null, pluginVersion: '1.20.0' }
+  const calm = { ended: false, callsAgain: true, remindAt: 0, appSession: null, pluginVersion: '1.20.0' }
   assert.deepEqual(sessions.sort((a, b) => a.id.localeCompare(b.id)), [
     { mood: 'working', updatedAt: NOW, ...calm, calledAt: 0, sadAt: 0, movedOn: false, id: 'busy' },
     { mood: 'calling', updatedAt: NOW, ...calm, calledAt: NOW, sadAt: 0, movedOn: false, id: 'calling' },
@@ -172,6 +173,107 @@ test("a report keeps the Claude cat's version only in a version's shape; one tha
 
   const kept = Object.fromEntries(readSessions(dir, NOW).map(session => [session.id, session.pluginVersion]))
   assert.deepEqual(kept, { new: '1.21.0', untold: null, odd: null, number: null, old: '1.20.0' })
+  fs.rmSync(dir, { recursive: true })
+})
+
+// The person asks in the conversation itself, from the Claude cat's row above
+// the prompt, to be reminded of it later: its report then says when.
+const MINUTE = 60 * 1000
+const putOff = {
+  id: 'asking',
+  mood: 'calling',
+  updatedAt: NOW - MINUTE,
+  calledAt: NOW - MINUTE,
+  callsAgain: true,
+  remindAt: NOW + 60 * MINUTE,
+  appSession: 'local_asking',
+  sadAt: 0,
+}
+
+test('a waiting conversation the person put off is quiet till its time', () => {
+  const plain = { ...putOff, remindAt: 0 }
+
+  assert.equal(withReminder(plain, NOW), plain, 'not put off: as its report says')
+  assert.equal(pickMood([plain], NOW), 'calling')
+  assert.equal(pickMood([withReminder(putOff, NOW)], NOW), 'resting')
+  assert.equal(pickMood([withReminder(putOff, NOW + 59 * MINUTE)], NOW + 59 * MINUTE), 'resting', 'still quiet')
+  assert.equal(chatToOpen([withReminder(putOff, NOW)], NOW), null, 'nothing for a click to open meanwhile')
+  assert.equal(wantsCallAgain([withReminder(putOff, NOW)], NOW), false, 'and no meow every few minutes')
+})
+
+test('at its time the cat calls again, meows, and a click opens the conversation', () => {
+  const at = putOff.remindAt
+  const seen = new Map()
+
+  // The cat has been looking all along.
+  hasNewCall([withReminder(putOff, NOW)], seen)
+  assert.equal(hasNewCall([withReminder(putOff, at - 1)], seen), false, 'not a moment before')
+  assert.equal(pickMood([{ ...putOff, remindAt: 0 }], at), 'resting', 'left alone the cat would have given up by now')
+
+  const now = [withReminder(putOff, at)]
+  assert.equal(pickMood(now, at), 'calling')
+  assert.equal(hasNewCall(now, seen), true, 'a meow, as for a new call')
+  assert.equal(hasNewCall([withReminder(putOff, at + 5000)], seen), false, 'one meow, not one at every look')
+  assert.equal(chatToOpen(now, at), 'local_asking')
+  assert.equal(wantsCallAgain(now, at + 3 * MINUTE), true, 'a card holding the work up meows again as ever')
+})
+
+test('after its time the cat calls for as long as for any call, then gives up as ever', () => {
+  const last = putOff.remindAt + ACTIVE_FOR_MS - 1
+
+  assert.equal(pickMood([withReminder(putOff, last)], last), 'calling')
+  assert.equal(withReminder(putOff, last + 1), putOff, 'long past: as its report says')
+  assert.equal(pickMood([withReminder(putOff, last + 1)], last + 1), 'resting')
+})
+
+test('the Claude cat says the time has come: the same call, with no second meow', () => {
+  const at = putOff.remindAt
+  const seen = new Map()
+  hasNewCall([withReminder(putOff, NOW)], seen)
+  assert.equal(hasNewCall([withReminder(putOff, at)], seen), true, 'the cat calls at the time')
+
+  // A moment later the conversation reports that call as its own.
+  const said = { ...putOff, calledAt: at, updatedAt: at + 2000, remindAt: 0 }
+  assert.equal(hasNewCall([withReminder(said, at + 2000)], seen), false)
+  assert.equal(pickMood([withReminder(said, at + 2000)], at + 2000), 'calling')
+})
+
+test('answered, or asking something new, a conversation is no longer put off', () => {
+  // The Claude cat takes the time out of the report; an older time left in one is passed over.
+  const answered = { ...putOff, mood: 'working', updatedAt: NOW + MINUTE }
+  const again = { ...putOff, updatedAt: NOW + 5 * MINUTE, calledAt: NOW + 5 * MINUTE, remindAt: 0 }
+
+  assert.equal(withReminder(answered, NOW + MINUTE), answered)
+  assert.equal(pickMood([withReminder(again, NOW + 5 * MINUTE)], NOW + 5 * MINUTE), 'calling')
+})
+
+test('each conversation is put off on its own', () => {
+  const other = { ...putOff, id: 'other', appSession: 'local_other', remindAt: 0 }
+  const both = [withReminder(putOff, NOW), withReminder(other, NOW)]
+
+  assert.equal(pickMood(both, NOW), 'calling')
+  assert.equal(chatToOpen(both, NOW), 'local_other', 'the click opens the one that calls')
+})
+
+test('reading the reports keeps to the reminders in them, and passes over a time that is not one', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'desktop-cat-'))
+  const write = (name, fields) =>
+    fs.writeFileSync(path.join(dir, name), JSON.stringify({ mood: 'calling', updatedAt: NOW, calledAt: NOW, ...fields }))
+
+  write('later.json', { remindAt: NOW + MINUTE })
+  write('now.json', { remindAt: 0 })
+  write('odd.json', { remindAt: 'soon' })
+  write('negative.json', { remindAt: -5 })
+  write('older.json', {})
+
+  const kept = Object.fromEntries(readSessions(dir, NOW).map(session => [session.id, [session.mood, session.remindAt]]))
+  assert.deepEqual(kept, {
+    later: ['resting', NOW + MINUTE],
+    now: ['calling', 0],
+    odd: ['calling', 0],
+    negative: ['calling', 0],
+    older: ['calling', 0],
+  })
   fs.rmSync(dir, { recursive: true })
 })
 

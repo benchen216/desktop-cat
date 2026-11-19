@@ -67,7 +67,7 @@ function pluginVersionOf(report) {
 
 function parseSession(text) {
   const report = JSON.parse(text)
-  const { mood, updatedAt, ended, calledAt, callsAgain, sadAt, movedOn, appSession } = report
+  const { mood, updatedAt, ended, calledAt, callsAgain, remindAt, sadAt, movedOn, appSession } = report
 
   return MOODS.has(mood) && Number.isFinite(updatedAt)
     ? {
@@ -77,6 +77,9 @@ function parseSession(text) {
         calledAt: Number.isFinite(calledAt) ? calledAt : 0,
         // Older Claude cats never said: they all wanted the meow again.
         callsAgain: callsAgain !== false,
+        // When to call the person again, if they put the conversation off
+        // there (the Claude cat's row above the prompt); 0 when they did not.
+        remindAt: Number.isFinite(remindAt) && remindAt > 0 ? remindAt : 0,
         sadAt: Number.isFinite(sadAt) ? sadAt : 0,
         movedOn: movedOn === true,
         // Where the Claude desktop app can open it: none from a terminal, or
@@ -86,6 +89,28 @@ function parseSession(text) {
         pluginVersion: pluginVersionOf(report),
       }
     : null
+}
+
+/**
+ * A conversation as the cat takes it. One waiting on the person that they
+ * asked, in the conversation, to be reminded of later is quiet till that
+ * time; from then on it calls as if it had only just called, for as long as
+ * any call lasts, though its report may be far older by then.
+ */
+function withReminder(session, now) {
+  const { remindAt } = session
+
+  if (session.mood !== 'calling' || !(remindAt > 0) || now - remindAt >= ACTIVE_FOR_MS) {
+    return session
+  }
+
+  return now < remindAt
+    ? { ...session, mood: 'resting' }
+    : {
+        ...session,
+        calledAt: Math.max(session.calledAt, remindAt),
+        updatedAt: Math.max(session.updatedAt, remindAt),
+      }
 }
 
 /** True when a conversation called out since the last look. `seen` remembers. */
@@ -137,7 +162,8 @@ function chatToOpen(sessions, now) {
   return last.appSession
 }
 
-/** Reads every conversation's report and clears the ones that are over. */
+/** Reads every conversation's report, as the cat takes it now (a reminder
+    the person asked for is kept to), and clears the ones that are over. */
 function readSessions(dir, now) {
   let names
 
@@ -166,7 +192,7 @@ function readSessions(dir, now) {
       if (session.ended || now - session.updatedAt > FORGET_AFTER_MS) {
         fs.rmSync(file, { force: true })
       } else {
-        sessions.push({ ...session, id: name.slice(0, -'.json'.length) })
+        sessions.push(withReminder({ ...session, id: name.slice(0, -'.json'.length) }, now))
       }
     } catch {
       // Caught mid-write: the next change to the file reads it whole.
@@ -188,4 +214,5 @@ module.exports = {
   pickMood,
   readSessions,
   wantsCallAgain,
+  withReminder,
 }

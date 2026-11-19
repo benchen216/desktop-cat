@@ -159,7 +159,7 @@ test('each conversation reports its mood to its own file, in order', async ($, o
 
   const path = 'C:/Users/me/.desktop-cat/sessions/abc.json'
   // No manifest to read here: the desktop cat then can't tell how old this Claude cat is.
-  const calm = { callsAgain: true, sadAt: 0, movedOn: false, pluginVersion: null }
+  const calm = { callsAgain: true, remindAt: 0, sadAt: 0, movedOn: false, pluginVersion: null }
   expect(writes).toEqual([
     { path, mood: 'working', updatedAt: 1234, ended: false, calledAt: 0, ...calm },
     { path, mood: 'resting', updatedAt: 1234, ended: false, calledAt: 0, ...calm },
@@ -498,7 +498,7 @@ test('the pane cat rests until a turn starts', async $ => {
 
 /** The reports the desktop cat reads, for a turn that ends with the next-step box. */
 const endingWithTheBox = (on: Parameters<TestBody>[1]) => {
-  const written: { mood: string; calledAt: number; callsAgain: boolean }[] = []
+  const written: { mood: string; calledAt: number; callsAgain: boolean; remindAt: number }[] = []
 
   on('env.get', () => ({ value: 'C:/Users/me' }))
   on('session.id', () => ({ value: 'abc' }))
@@ -685,6 +685,419 @@ test("in the Claude app the report carries the app's own id for the conversation
   expect(written.find(report => report.mood === 'calling')).toMatchObject({ appSession: 'local_1a2b-3c4d' })
   // In a terminal the app sets nothing, and the report says nothing of it:
   // the first test's reports hold no appSession at all.
+})
+
+// The band above the prompt, as the Claude app asks this cat for its row.
+const BAND = {
+  plugin: 'desktop-cat',
+  component: 'AbovePrompt',
+  props: {
+    hasSurvey: false,
+    isCollapsed: false,
+    isWorking: false,
+    maxRows: 10,
+    bodyColumns: 80,
+    scroll: { offset: 0, bodyRows: 10 },
+    view: {},
+  },
+} as const
+const HOUR = 60 * 60 * 1000
+const WAITS = ['15 分鐘', '30 分鐘', '1 小時']
+const timeOfDay = (at: number, language = 'zh-Hant') =>
+  new Intl.DateTimeFormat(language, { hour: 'numeric', minute: '2-digit' }).format(at)
+
+/** Where no row of the cat's is drawn, the engine's own is: here, a word. */
+const engineDraws = (on: Parameters<TestBody>[1]) =>
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+
+    return <Text>engine</Text>
+  })
+
+/** The row above the prompt as a surface shows it now: its words and its buttons. */
+const reminderRow = async ($: Parameters<TestBody>[0], surface: 'desktop' | 'mobile' | 'terminal' = 'desktop') => {
+  const ui = await $.ui.mount({ ...BAND, surface })
+  const buttons = (await ui.findAll({ type: 'Button' })).map(found => String(found.props.label))
+  // Beside the cat's row the mount draws the engine's own, which is not the
+  // cat's to answer for; and the words on a button are the button's.
+  const words = (await ui.findAll({ type: 'Text' }))
+    .map(found => found.text)
+    .filter(word => word !== 'engine' && !buttons.includes(String(word)))
+  await ui.unmount()
+
+  return { words, buttons }
+}
+
+/** A turn that ended on a question in the next-step box: the conversation waits on the person. */
+const askInTheBox = async ($: Parameters<TestBody>[0], clock: { settle: () => Promise<unknown> }) => {
+  await $.tool.call({ tool: 'mcp__ccd_turn__wrap_up', recap: 'Fixed it.', ask: 'Install it?' })
+  await $.turn.complete(ANSWERED)
+  await clock.settle()
+}
+
+test('only while the conversation waits on the person, a row above the prompt offers to remind them later', async ($, on) => {
+  const { clock } = endingWithTheBox(on)
+  engineDraws(on)
+
+  expect(await reminderRow($)).toEqual({ words: [], buttons: [] })
+
+  await askInTheBox($, clock)
+  for (const surface of ['desktop', 'mobile'] as const) {
+    expect(await reminderRow($, surface)).toEqual({ words: ['稍後提醒我'], buttons: WAITS })
+  }
+  // The row opens with the cat's paw, still and pink, so it is seen to be the cat's.
+  const row = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const paw = await row.find({ type: 'Svg' })
+  expect(paw?.props.alt).toBe('A pink paw print')
+  // A 16 px square, as tall as the words' line, so the row is laid out as
+  // without it; the paw stands on the square's foot, where the words stand.
+  expect(paw?.props.width).toBe(16)
+  expect(paw?.props.height).toBe(16)
+  expect(String(paw?.props.source)).toContain('viewBox="0 0 100 100"')
+  expect(String(paw?.props.source)).toContain('translate(50 100) scale(.92) translate(-50 -87.5)')
+  expect(String(paw?.props.source)).toContain('#E998A9')
+  expect(String(paw?.props.source)).not.toContain('animate')
+  // Its words in the cat's rose brown, the same on a light app and a dark one; the buttons are the app's.
+  const colours = (await row.findAll({ type: 'Text' }))
+    .filter(found => found.text !== 'engine')
+    .map(found => found.props.color)
+  expect(colours).toEqual(['#A0766F'])
+  await row.unmount()
+  // The terminal keeps its own band, and a survey has the band first.
+  expect(await reminderRow($, 'terminal')).toEqual({ words: [], buttons: [] })
+  const survey = await $.ui.mount({ ...BAND, surface: 'desktop', props: { ...BAND.props, hasSurvey: true } })
+  expect(await survey.findAll({ type: 'Button' })).toHaveLength(0)
+  await survey.unmount()
+
+  // The next turn begins: nothing waits on the person any more.
+  await $.tool.call({ tool: 'Bash', command: 'ls' })
+  await clock.settle()
+  expect(await reminderRow($)).toEqual({ words: [], buttons: [] })
+})
+
+test('a press puts the conversation off: the report says till when, and the row says so and takes it back', async ($, on) => {
+  const { written, clock } = endingWithTheBox(on)
+
+  await askInTheBox($, clock)
+  expect(written.at(-1)).toMatchObject({ mood: 'calling', calledAt: 1234, remindAt: 0 })
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'remind-in60' })
+  await clock.settle()
+  // Still waiting on the person, as of the same call: only the time is new.
+  expect(written.at(-1)).toMatchObject({ mood: 'calling', calledAt: 1234, callsAgain: false, remindAt: 1234 + HOUR })
+  expect((await ui.find({ type: 'Text' }))?.text).toBe(`將在 ${timeOfDay(1234 + HOUR)} 提醒你`)
+  expect((await ui.findAll({ type: 'Button' })).map(found => found.props.label)).toEqual(['取消'])
+
+  await ui.press({ key: 'remind-cancel' })
+  await clock.settle()
+  expect(written.at(-1)).toMatchObject({ mood: 'calling', calledAt: 1234, remindAt: 0 })
+  expect((await ui.findAll({ type: 'Button' })).map(found => found.props.label)).toEqual(WAITS)
+
+  // A time chosen again replaces the last.
+  await ui.press({ key: 'remind-in15' })
+  await ui.press({ key: 'remind-cancel' })
+  await clock.settle()
+  expect(written.at(-1)).toMatchObject({ remindAt: 0 })
+  await ui.unmount()
+})
+
+test('when the time comes the conversation calls again as of then, and the row offers its choices anew', async ($, on) => {
+  const { written, clock } = await sendingHelpers($, on, [])
+  const reported = () => written.at(-1) as { mood: string; calledAt: number; remindAt: number } | undefined
+
+  await $.tool.call({ tool: 'mcp__ccd_turn__wrap_up', recap: 'Fixed it.', ask: 'Install it?' })
+  await $.turn.complete(ANSWERED)
+  await clock.settle()
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'remind-in15' })
+  await clock.settle()
+  const at = 1234 + 15 * 60 * 1000
+  expect(reported()).toMatchObject({ mood: 'calling', calledAt: 1234, remindAt: at })
+
+  // Before the time, whatever is told the desktop cat still says when.
+  await clock.advance(14 * 60 * 1000)
+  expect(reported()).toMatchObject({ mood: 'calling', calledAt: 1234, remindAt: at })
+  expect((await ui.findAll({ type: 'Button' })).map(found => found.props.label)).toEqual(['取消'])
+
+  // The call is dated to the time chosen, when a desktop cat keeping the time
+  // itself began to call: so it meows once, not twice.
+  await clock.advance(60 * 1000 + 2000)
+  expect(reported()).toMatchObject({ mood: 'calling', calledAt: at, remindAt: 0 })
+  expect((await ui.findAll({ type: 'Button' })).map(found => found.props.label)).toEqual(WAITS)
+  await ui.unmount()
+})
+
+test('answered while put off, the conversation is no longer put off', async ($, on) => {
+  const written: { mood: string; remindAt: number }[] = []
+  on('env.get', () => ({ value: 'C:/Users/me' }))
+  on('session.id', () => ({ value: 'abc' }))
+  const clock = mock.clock(on, { now: 1234 })
+  on('fs.write', (_, e) => {
+    written.push(JSON.parse(e.text))
+
+    return { value: undefined }
+  })
+  on('tool.check', () => ({ decision: 'ask' }))
+  on('tool.call', () => ({ result: {} }))
+  let answer = () => {}
+  on(
+    'classic.PermissionRequest',
+    () =>
+      new Promise(resolve => {
+        answer = () => resolve({ decision: { behavior: 'allow' } })
+      }),
+  )
+  engineDraws(on)
+
+  // A card holds the work up, and the person asks to be reminded of it.
+  const calling = $.tool.call({ tool: 'Bash', command: 'rm x' })
+  await clock.settle()
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'remind-in30' })
+  await clock.settle()
+  await ui.unmount()
+  expect(written.at(-1)).toMatchObject({ mood: 'calling', remindAt: 1234 + HOUR / 2 })
+
+  answer()
+  await calling
+  await clock.settle()
+  expect(written.at(-1)).toMatchObject({ mood: 'working', remindAt: 0 })
+  expect(await reminderRow($)).toEqual({ words: [], buttons: [] })
+})
+
+test('the row speaks the language the cats speak, the time too', async ($, on) => {
+  const files = desktopFiles(on, { language: 'en' })
+  const clock = mock.clock(on, { now: 1234 })
+  on('command.register', () => ({ value: { command: 'cat' } }))
+  on('tool.register', () => ({ value: { tool: SAD_TOOL } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('tool.call', () => ({ result: {} }))
+  on('turn.complete', () => ({ text: '' }))
+  on('agent.list', () => ({ value: [] }))
+  await $.session.start(START)
+  expect(files.has(PREFS)).toBe(true)
+
+  await askInTheBox($, clock)
+  expect(await reminderRow($)).toEqual({
+    words: ['Remind me later'],
+    buttons: ['In 15 minutes', 'In 30 minutes', 'In 1 hour'],
+  })
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'remind-in60' })
+  await clock.settle()
+  expect((await ui.find({ type: 'Text' }))?.text).toBe(`Reminder set for ${timeOfDay(1234 + HOUR, 'en')}`)
+  expect((await ui.findAll({ type: 'Button' })).map(found => found.props.label)).toEqual(['Cancel'])
+  await ui.unmount()
+})
+
+test('work after the next-step box means the turn went on: its question does not wait on the person', async ($, on) => {
+  const { written, clock } = endingWithTheBox(on)
+  engineDraws(on)
+
+  // The box asks, the person's answer arrives while the turn runs, and the
+  // conversation carries on to the end of the work without filling the box again.
+  await $.tool.call({ tool: 'mcp__ccd_turn__wrap_up', recap: 'Paused.', ask: 'How should it change?' })
+  await $.tool.call({ tool: 'mcp__ccd_turn__update_plan', advance: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push' })
+  await $.turn.complete(ANSWERED)
+  await clock.settle()
+
+  expect((await paneCat($)).label).toBe('休息中')
+  // The work is done: one meow, and nothing put to the person.
+  expect(written.at(-1)).toMatchObject({ mood: 'resting', calledAt: 1234 })
+  expect(await reminderRow($)).toEqual({ words: [], buttons: [] })
+
+  // The next turn ends on a question of its own: that one waits.
+  await $.tool.call({ tool: 'Bash', command: 'ls' })
+  await $.tool.call({ tool: 'mcp__ccd_turn__wrap_up', recap: 'Done.', ask: 'Ship it?' })
+  await $.turn.complete(ANSWERED)
+  await clock.settle()
+  expect((await paneCat($)).label).toBe('等你回應')
+  expect(await reminderRow($)).toEqual({ words: ['稍後提醒我'], buttons: WAITS })
+})
+
+/** The engine's side of a model step that says and calls nothing. */
+const engineSteps = (on: Parameters<TestBody>[1]) =>
+  on('turn.step', async function* (_, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
+
+/** One step of the conversation's own, run to its end. */
+const step = async ($: Parameters<TestBody>[0], index: number) => {
+  for await (const chunk of $.turn.step({ turnId: 't', index, model: 'model', messageCount: 1 })) {
+    void chunk
+  }
+}
+
+/** The person types while the turn `t` runs. */
+const sayMeanwhile = ($: Parameters<TestBody>[0], kind: 'composer' | 'bridge' = 'composer') =>
+  $.prompt.submit({ text: '改成這樣就好', wait: false, origin: { kind }, turnId: 't' })
+
+const BOX_ASKS = { tool: 'mcp__ccd_turn__wrap_up', recap: 'Paused.', ask: 'How should it change?' } as const
+
+test('answered while the turn ran, with only a reply after: the question in the box does not wait on the person', async ($, on) => {
+  const { written, clock } = endingWithTheBox(on)
+  engineSteps(on)
+  engineDraws(on)
+  on('prompt.submit', (_, e) => ({ text: e.text }))
+
+  // The person types while the step that fills the box is still running; their
+  // words are read at the next step, which only replies.
+  await step($, 0)
+  await sayMeanwhile($)
+  await $.tool.call(BOX_ASKS)
+  await step($, 1)
+  await $.turn.complete(ANSWERED)
+  await clock.settle()
+
+  expect((await paneCat($)).label).toBe('休息中')
+  expect(written.at(-1)).toMatchObject({ mood: 'resting', calledAt: 1234 })
+  expect(await reminderRow($)).toEqual({ words: [], buttons: [] })
+})
+
+test('said from the phone as the turn closes on its question: the person has spoken, so the cat does not call them', async ($, on) => {
+  const { written, clock } = endingWithTheBox(on)
+  engineSteps(on)
+  on('prompt.submit', (_, e) => ({ text: e.text }))
+
+  await step($, 0)
+  await $.tool.call(BOX_ASKS)
+  await step($, 1)
+  await sayMeanwhile($, 'bridge')
+  await $.turn.complete(ANSWERED)
+  await clock.settle()
+
+  expect(written.at(-1)).toMatchObject({ mood: 'resting' })
+})
+
+test('a question put after the person spoke, and what is not their words, still wait on them', async ($, on) => {
+  const { written, clock } = endingWithTheBox(on)
+  engineSteps(on)
+  on('prompt.submit', (_, e) => ({ text: e.text }))
+
+  // Said early and read: the question the turn ends on comes after it.
+  await step($, 0)
+  await sayMeanwhile($)
+  await step($, 1)
+  await $.tool.call(BOX_ASKS)
+  await step($, 2)
+  await $.turn.complete(ANSWERED)
+  await clock.settle()
+  expect(written.at(-1)).toMatchObject({ mood: 'calling', callsAgain: false })
+
+  // A background task reporting in is not the person answering.
+  await $.tool.call({ tool: 'Bash', command: 'ls' })
+  await step($, 0)
+  await $.tool.call(BOX_ASKS)
+  await $.prompt.submit({ text: 'done', wait: false, origin: { kind: 'task-notification' }, turnId: 't' })
+  await step($, 1)
+  await $.turn.complete(ANSWERED)
+  await clock.settle()
+  expect(written.at(-1)).toMatchObject({ mood: 'calling', callsAgain: false })
+})
+
+test("the task list updated beside the box is the turn's own bookkeeping: the question still waits", async ($, on) => {
+  const { written, clock } = endingWithTheBox(on)
+
+  await $.tool.call({ tool: 'mcp__ccd_turn__wrap_up', recap: 'Fixed it.', ask: 'Install it?' })
+  await $.tool.call({ tool: 'mcp__ccd_turn__update_plan', advance: true })
+  await $.turn.complete(ANSWERED)
+  await clock.settle()
+
+  expect((await paneCat($)).label).toBe('等你回應')
+  expect(written.at(-1)).toMatchObject({ mood: 'calling', callsAgain: false })
+})
+
+/** A card that holds the work up and is left unanswered: the reports the desktop cat reads, and the answer. */
+const cardLeftWaiting = (on: Parameters<TestBody>[1]) => {
+  const written: { mood: string; updatedAt: number; calledAt: number; callsAgain: boolean }[] = []
+  const card = { answer: () => {} }
+
+  on('env.get', (_, e) => ({ value: e.name === 'USERPROFILE' ? 'C:/Users/me' : undefined }))
+  on('session.id', () => ({ value: 'abc' }))
+  const clock = mock.clock(on, { now: 1234 })
+  on('fs.exists', () => ({ value: false }))
+  on('fs.write', (_, e) => {
+    written.push(JSON.parse(e.text))
+
+    return { value: undefined }
+  })
+  on('command.register', () => ({ value: { command: 'cat' } }))
+  on('tool.register', () => ({ value: { tool: SAD_TOOL } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('tool.call', () => ({ result: {} }))
+  on('agent.list', () => ({ value: [] }))
+  on('tool.check', () => ({ decision: 'ask' }))
+  on(
+    'classic.PermissionRequest',
+    () =>
+      new Promise(resolve => {
+        card.answer = () => resolve({ decision: { behavior: 'allow' } })
+      }),
+  )
+
+  return { written, clock, card }
+}
+
+test('left waiting, the conversation keeps telling the desktop cat that it waits, till it is answered', async ($, on) => {
+  const { written, clock, card } = cardLeftWaiting(on)
+  await $.session.start(START)
+
+  const calling = $.tool.call({ tool: 'Bash', command: 'rm x' })
+  await clock.settle()
+  expect(written.at(-1)).toMatchObject({ mood: 'calling', calledAt: 1234, callsAgain: true })
+
+  const told = written.length
+  await clock.advance(9 * 60 * 1000)
+  expect(written).toHaveLength(told)
+
+  // Well before the half hour after which the desktop cat would take it for gone, and sleep.
+  await clock.advance(60 * 1000 + 2000)
+  expect(written).toHaveLength(told + 1)
+  expect(written.at(-1)).toMatchObject({ mood: 'calling', calledAt: 1234, callsAgain: true })
+  expect(written.at(-1)?.updatedAt).toBeGreaterThanOrEqual(1234 + 10 * 60 * 1000)
+  expect((await paneCat($)).label).toBe('等你回應')
+
+  // Answered, it has nothing more to keep saying.
+  card.answer()
+  await calling
+  await clock.settle()
+  expect(written.at(-1)).toMatchObject({ mood: 'working' })
+  const after = written.length
+  await clock.advance(11 * 60 * 1000)
+  expect(written).toHaveLength(after)
+})
+
+test('the meow every few minutes is asked for through the first half hour of a call, not after', async ($, on) => {
+  // No conversation started here, so no check runs every two seconds: the clock moves at once.
+  const { written, clock, card } = cardLeftWaiting(on)
+
+  const calling = $.tool.call({ tool: 'Bash', command: 'rm x' })
+  await clock.settle()
+  expect(written.at(-1)).toMatchObject({ mood: 'calling', calledAt: 1234, callsAgain: true })
+
+  // Whatever is told the desktop cat meanwhile: here, the person puts the call off and takes that back.
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const tellAgain = async () => {
+    await ui.press({ key: 'remind-in60' })
+    await ui.press({ key: 'remind-cancel' })
+    await clock.settle()
+  }
+
+  await clock.advance(29 * 60 * 1000)
+  await tellAgain()
+  expect(written.at(-1)).toMatchObject({ mood: 'calling', calledAt: 1234, callsAgain: true })
+
+  await clock.advance(60 * 1000)
+  await tellAgain()
+  expect(written.at(-1)).toMatchObject({ mood: 'calling', calledAt: 1234, callsAgain: false })
+  await ui.unmount()
+
+  card.answer()
+  await calling
+  await clock.settle()
 })
 
 test('a card that holds the work up still asks the desktop cat to meow again', async ($, on) => {

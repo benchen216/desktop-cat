@@ -18,7 +18,7 @@ const { isNewer } = require('./updates')
 
 // The Claude cat this desktop cat goes with. Kept equal to the plugin's own
 // version by the public-copy script, which stops if they differ.
-const PAIRED_CLAUDE_CAT = '1.21.0'
+const PAIRED_CLAUDE_CAT = '1.22.7'
 // Its public name in Claude Code, and the marketplace it comes from.
 const MARKETPLACE = 'desktop-cat'
 const PLUGIN_ID = `desktop-cat@${MARKETPLACE}`
