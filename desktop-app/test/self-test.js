@@ -3,7 +3,14 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
-const { app, BrowserWindow, Menu, clipboard, screen, shell } = require('electron')
+const { app, BrowserWindow, Menu, clipboard, nativeTheme, screen, shell } = require('electron')
+
+// A Mac opens the download page instead of putting a new version in itself.
+const IS_MAC = process.platform === 'darwin'
+const INSTALL = IS_MAC ? '前往下載' : '安裝更新'
+
+// The colours checked are the light ones, whatever look the computer has.
+nativeTheme.themeSource = 'light'
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'desktop-cat-test-'))
 
@@ -784,8 +791,8 @@ async function run() {
         hint: null,
         warning: '如果你自己改過桌面貓的程式，更新會把改動蓋掉。',
         versions: `新版 999.9.8（你現在是 ${app.getVersion()}）`,
-        buttons: ['略過此版本', '稍後提醒我', '安裝更新'],
-        focused: '安裝更新',
+        buttons: ['略過此版本', '稍後提醒我', INSTALL],
+        focused: INSTALL,
         face: 1,
         tail: 0,
         moving: 0,
@@ -831,22 +838,32 @@ async function run() {
     autoUpdater.emit('update-available', { version: '999.9.9' })
     notice = await noticeShown('the window, to install')
     pressKey(notice, 'Enter')
-    await waitFor(() => updaterCalls.includes('download'), 'the download')
-    await waitFor(() => notice.win.isDestroyed(), 'the window closed by the yes')
-    item = await openMenu()
-    assert.deepEqual(
-      lastMenu.slice(0, 3).map(entry => entry.label ?? '—'),
-      ['正在下載更新…', '—', '顯示貓咪'],
-      'said at the top while it comes down',
-    )
-    assert.equal(item('正在下載更新…').enabled, false, 'said, not clicked')
-    autoUpdater.emit('update-downloaded', { version: '999.9.9' })
-    finishDownload([])
-    assert.deepEqual(updaterCalls, ['download', ['putIn', true, true]], 'quietly, and the cat comes back as it')
-    await wait(50)
-    item = await openMenu()
-    assert.equal(lastMenu[0].label, '顯示貓咪', 'done: nothing about updates at the top')
-    console.log('ok - new versions are asked about first, with what is new, and come down only after a yes')
+
+    if (IS_MAC) {
+      await waitFor(() => openedPages.some(page => page.endsWith('/releases/latest')), 'the download page')
+      await waitFor(() => notice.win.isDestroyed(), 'the window closed by the yes')
+      assert.deepEqual(updaterCalls, [], 'on a Mac nothing comes down by itself')
+      item = await openMenu()
+      assert.equal(lastMenu[0].label, '顯示貓咪', 'nothing about updates at the top')
+      console.log('ok - new versions are asked about first, with what is new, and a yes opens the download page')
+    } else {
+      await waitFor(() => updaterCalls.includes('download'), 'the download')
+      await waitFor(() => notice.win.isDestroyed(), 'the window closed by the yes')
+      item = await openMenu()
+      assert.deepEqual(
+        lastMenu.slice(0, 3).map(entry => entry.label ?? '—'),
+        ['正在下載更新…', '—', '顯示貓咪'],
+        'said at the top while it comes down',
+      )
+      assert.equal(item('正在下載更新…').enabled, false, 'said, not clicked')
+      autoUpdater.emit('update-downloaded', { version: '999.9.9' })
+      finishDownload([])
+      assert.deepEqual(updaterCalls, ['download', ['putIn', true, true]], 'quietly, and the cat comes back as it')
+      await wait(50)
+      item = await openMenu()
+      assert.equal(lastMenu[0].label, '顯示貓咪', 'done: nothing about updates at the top')
+      console.log('ok - new versions are asked about first, with what is new, and come down only after a yes')
+    }
 
     // The Claude cat: Claude Code was asked a moment after the start, and
     // couldn't tell, so the conversations' reports decide. One running an

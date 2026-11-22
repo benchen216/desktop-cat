@@ -23,7 +23,8 @@
     "overwrites": "If you've changed Desktop Cat's code yourself, updating will overwrite your changes.",
     "skip": "Skip this version",
     "later": "Remind me later",
-    "install": "Install update"
+    "install": "Install update",
+    "download": "Go to download"
   },
   "claudeCat": {
     "title": "Couldn't update the Claude Code plugin",

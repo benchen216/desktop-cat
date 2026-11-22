@@ -14,6 +14,7 @@
     "site-art": "node tools/build-site-art.mjs",
     "test": "node --test test/mood.test.js test/praise.test.js test/prefs.test.js test/usage.test.js test/i18n.test.js test/updates.test.js test/claude-cat.test.js && electron test/self-test.js",
     "package": "electron-builder --win nsis --x64 --publish never",
+    "package:mac": "electron-builder --mac --publish never",
     "package:zip": "electron-packager . DesktopCat --platform=win32 --arch=x64 --out=dist --overwrite --icon=assets/icon.ico --ignore=\"^/test\" --ignore=\"^/dist\" --ignore=\"^/tools\""
   },
   "devDependencies": {
@@ -47,6 +48,35 @@
       ],
       "icon": "assets/icon.ico",
       "verifyUpdateCodeSignature": false
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon-mac.png",
+      "category": "public.app-category.entertainment",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "extendInfo": {
+        "LSUIElement": true
+      },
+      "artifactName": "DesktopCat-${version}-${arch}.${ext}"
+    },
+    "dmg": {
+      "artifactName": "DesktopCat-${version}-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": true,

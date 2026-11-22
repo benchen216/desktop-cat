@@ -56,35 +56,58 @@ const folders = dir => {
  * terminal finds on the PATH; then where Claude Code's installer puts it.
  * All of them share the person's plugins, in ~/.claude.
  */
+/** The Claude desktop app's own copies in `versions` (a folder per version,
+    a folder per build in each), as { file, version }. `inBuild` is where in a
+    build folder the program is. */
+function appCopies(versions, inBuild) {
+  const copies = []
+
+  for (const version of folders(versions)) {
+    for (const build of folders(path.join(versions, version))) {
+      const file = path.join(versions, version, build, ...inBuild)
+
+      if (isFile(file)) {
+        copies.push({ file, version })
+      }
+    }
+  }
+
+  return copies
+}
+
+/** The copies' programs, newest first, whichever folder each came from. */
+const newestFirst = copies =>
+  [...copies]
+    .sort((a, b) => (isNewer(a.version, b.version) ? -1 : isNewer(b.version, a.version) ? 1 : 0))
+    .map(copy => copy.file)
+
+// Where the Claude desktop app keeps its Claude Codes on a Mac: one folder,
+// with no folder per account as on Windows.
+const MAC_APP_CODES = ['Library', 'Application Support', 'Claude', 'claude-code']
+const MAC_APP_PROGRAM = ['claude.app', 'Contents', 'MacOS', 'claude']
+// A program opened from the Finder or at login gets only a short PATH, without
+// the folders Homebrew and Claude Code's own installers put it in.
+const MAC_USUAL_DIRS = home => ['/opt/homebrew/bin', '/usr/local/bin', path.join(home, '.claude', 'local')]
+
 function findClaudeCodes({ env = process.env, platform = process.platform, home = os.homedir() } = {}) {
   const windows = platform === 'win32'
+  const mac = platform === 'darwin'
   const found = []
 
   if (windows) {
     const data = path.join(env.LOCALAPPDATA ?? path.join(home, 'AppData', 'Local'), 'Claude-Data')
-    const copies = []
 
-    for (const account of folders(data)) {
-      const versions = path.join(data, account, 'claude-code')
+    found.push(...newestFirst(folders(data).flatMap(account => appCopies(path.join(data, account, 'claude-code'), ['claude.exe']))))
+  }
 
-      for (const version of folders(versions)) {
-        for (const build of folders(path.join(versions, version))) {
-          const file = path.join(versions, version, build, 'claude.exe')
-
-          if (isFile(file)) {
-            copies.push({ file, version })
-          }
-        }
-      }
-    }
-
-    copies.sort((a, b) => (isNewer(a.version, b.version) ? -1 : isNewer(b.version, a.version) ? 1 : 0))
-    found.push(...copies.map(copy => copy.file))
+  if (mac) {
+    found.push(...newestFirst(appCopies(path.join(home, ...MAC_APP_CODES), MAC_APP_PROGRAM)))
   }
 
   const names = windows ? ['claude.exe', 'claude.cmd'] : ['claude']
+  const pathDirs = (env.PATH ?? env.Path ?? '').split(path.delimiter).filter(Boolean)
 
-  for (const dir of (env.PATH ?? env.Path ?? '').split(path.delimiter).filter(Boolean)) {
+  for (const dir of [...pathDirs, ...(mac ? MAC_USUAL_DIRS(home) : [])]) {
     for (const name of names) {
       found.push(path.join(dir, name))
     }

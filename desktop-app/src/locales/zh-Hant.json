@@ -23,7 +23,8 @@
     "overwrites": "如果你自己改過桌面貓的程式，更新會把改動蓋掉。",
     "skip": "略過此版本",
     "later": "稍後提醒我",
-    "install": "安裝更新"
+    "install": "安裝更新",
+    "download": "前往下載"
   },
   "claudeCat": {
     "title": "Claude 貓外掛無法自動更新",

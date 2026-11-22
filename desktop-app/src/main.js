@@ -120,6 +120,13 @@ const TIP_PAGES = {
 }
 // The Claude desktop app's own link to one of its conversations, as its menu
 // on the taskbar opens them: the app comes forward, showing that conversation.
+// On a Mac the cat lives in the menu bar, with no Dock icon (LSUIElement in
+// package.json), and follows the person from Space to Space.
+const IS_MAC = process.platform === 'darwin'
+// Where a Mac downloads a new version: an app without a paid signature cannot
+// put one in by itself.
+const DOWNLOAD_PAGE = 'https://github.com/hannahindielab/desktop-cat/releases/latest'
+
 const chatLink = appSession => `claude://code/continue?session=${encodeURIComponent(appSession)}`
 
 let win = null
@@ -262,6 +269,21 @@ function resizeNow() {
   win.webContents.send('cat:fade-in', windowSide())
 }
 
+/** On a Mac, a window stays on the Space it opened in unless told otherwise:
+    the cat and its effects come along to every Space, full-screen ones too. */
+function onEverySpace(shown) {
+  if (IS_MAC) {
+    shown.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true })
+  }
+}
+
+/** A Mac app with no Dock icon is not brought forward when its window opens. */
+function bringForward() {
+  if (IS_MAC) {
+    app.focus({ steal: true })
+  }
+}
+
 function setAlwaysOnTop(isOn) {
   settings.alwaysOnTop = isOn
   win.setAlwaysOnTop(isOn, ON_TOP_LEVEL)
@@ -305,7 +327,7 @@ function askToUpdate(newVersion, releaseNotes) {
     buttons: [
       { id: 'skip', label: t('update.skip'), look: 'quiet' },
       { id: 'later', label: t('update.later'), look: 'plain' },
-      { id: 'install', label: t('update.install'), look: 'main' },
+      { id: 'install', label: t(IS_MAC ? 'update.download' : 'update.install'), look: 'main' },
     ],
     cancel: 'later',
   })
@@ -375,6 +397,7 @@ function startUpdates() {
     version: app.getVersion(),
     isOn: () => settings.autoUpdate && app.isPackaged,
     ask: askToUpdate,
+    ...(IS_MAC ? { download: () => shell.openExternal(DOWNLOAD_PAGE) } : {}),
     store: {
       get: () => ({ lookedAt: settings.updateLookedAt, skippedVersion: settings.updateSkipped }),
       set: change => {
@@ -477,6 +500,7 @@ function showScreenEffects() {
     const shown = overlay
     shown.setIgnoreMouseEvents(true)
     shown.setAlwaysOnTop(true, ON_TOP_LEVEL)
+    onEverySpace(shown)
     shown.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
     shown.webContents.on('will-navigate', event => event.preventDefault())
     shown.once('ready-to-show', () => {
@@ -754,6 +778,8 @@ function changeLook(change) {
 
 /** The appearance window: one at a time, brought forward if it is open already. */
 function openLook() {
+  bringForward()
+
   if (lookWin !== null && !lookWin.isDestroyed()) {
     lookWin.show()
     lookWin.focus()
@@ -898,6 +924,9 @@ function createWindow() {
     maximizable: false,
     fullscreenable: false,
     skipTaskbar: true,
+    // On a Mac the cat's app is rarely the one in front: the first click pats
+    // or picks it up, rather than only bringing the app forward.
+    acceptFirstMouse: true,
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -910,6 +939,7 @@ function createWindow() {
   })
 
   win.setAlwaysOnTop(settings.alwaysOnTop, ON_TOP_LEVEL)
+  onEverySpace(win)
   // Clicks pass through to whatever is behind, until the pointer is on the cat.
   win.setIgnoreMouseEvents(true, { forward: true })
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
@@ -1072,7 +1102,10 @@ function trayIcon() {
   const usual = path.join(__dirname, '..', 'assets', 'tray.png')
   const own = path.join(__dirname, '..', 'assets', 'tray-dev.png')
 
-  return nativeImage.createFromPath(DEV_BUILD && fs.existsSync(own) ? own : usual)
+  const picture = nativeImage.createFromPath(DEV_BUILD && fs.existsSync(own) ? own : usual)
+
+  // The 32-pixel picture, read as a double-density one, fills the Mac's 16-point menu bar sharply.
+  return IS_MAC && !picture.isEmpty() ? nativeImage.createFromBuffer(picture.toPNG(), { scaleFactor: 2 }) : picture
 }
 
 /** What the tray says under the pointer: the development copy says so. */

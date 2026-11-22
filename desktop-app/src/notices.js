@@ -6,7 +6,7 @@
 // button, Esc or closing the window is the cancel answer, and the window
 // comes up in the middle of the screen, in front.
 
-const { BrowserWindow, clipboard, ipcMain, nativeTheme, screen } = require('electron')
+const { BrowserWindow, app, clipboard, ipcMain, nativeTheme, screen } = require('electron')
 const path = require('node:path')
 
 const WIDTH = 440
@@ -57,6 +57,11 @@ function fit(height) {
   win.center()
 
   if (!win.isVisible()) {
+    // A Mac app with no Dock icon is not brought forward by itself.
+    if (process.platform === 'darwin') {
+      app.focus({ steal: true })
+    }
+
     win.show()
   }
 }

@@ -67,6 +67,8 @@ test('the Claude Code to ask: the Claude app\'s own, newest first, then the PATH
     return file
   }
   const older = make('local', 'Claude-Data', 'claude_box', 'claude-code', '2.1.9', 'aaa', 'claude.exe')
+  // Another account's copy, between the two: the newest comes first whoever's it is.
+  const middle = make('local', 'Claude-Data', 'another_box', 'claude-code', '2.1.9.5', 'mmm', 'claude.exe')
   const newer = make('local', 'Claude-Data', 'claude_box', 'claude-code', '2.1.10', 'bbb', 'claude.exe')
   // A version folder with nothing in it is passed over.
   fs.mkdirSync(path.join(root, 'local', 'Claude-Data', 'claude_box', 'claude-code', '2.2.0', 'ccc'), { recursive: true })
@@ -84,8 +86,36 @@ test('the Claude Code to ask: the Claude app\'s own, newest first, then the PATH
     },
   })
 
-  assert.deepEqual(found, [newer, older, onPath, fromNpm, installed])
+  assert.deepEqual(found, [newer, middle, older, onPath, fromNpm, installed])
   assert.deepEqual(findClaudeCodes({ platform: 'win32', home: path.join(root, 'none'), env: { LOCALAPPDATA: path.join(root, 'none') } }), [])
+  fs.rmSync(root, { recursive: true })
+})
+
+test('on a Mac: the Claude app\'s own, newest first, then the PATH, then the folders a short PATH leaves out', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'desktop-cat-claude-'))
+  const make = (...parts) => {
+    const file = path.join(root, ...parts)
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, '')
+    return file
+  }
+  const codes = ['home', 'Library', 'Application Support', 'Claude', 'claude-code']
+  const program = ['claude.app', 'Contents', 'MacOS', 'claude']
+  const older = make(...codes, '2.1.9', 'aaa', ...program)
+  const newer = make(...codes, '2.1.326', 'bbb', ...program)
+  fs.mkdirSync(path.join(root, ...codes, '2.2.0', 'ccc'), { recursive: true })
+  const onPath = make('bin', 'claude')
+  const local = make('home', '.claude', 'local', 'claude')
+  const installed = make('home', '.local', 'bin', 'claude')
+
+  const found = findClaudeCodes({
+    platform: 'darwin',
+    home: path.join(root, 'home'),
+    env: { PATH: [path.join(root, 'bin'), path.join(root, 'nowhere')].join(path.delimiter) },
+  })
+
+  // Homebrew's folders are this computer's own, so only the test's files are compared.
+  assert.deepEqual(found.filter(file => file.startsWith(root)), [newer, older, onPath, local, installed])
   fs.rmSync(root, { recursive: true })
 })
 

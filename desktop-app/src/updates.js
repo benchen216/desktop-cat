@@ -88,7 +88,10 @@ function isNewer(version, than) {
  * a restart: when the cat last looked, and the version the person chose to
  * skip. `isOn` says whether looking is allowed now. `ask` shows the person the
  * new version, with its release notes as the updater gives them, and answers
- * with what they chose: 'install', 'later' or 'skip'.
+ * with what they chose: 'install', 'later' or 'skip'. `download` fetches the
+ * new version after their yes; on a Mac, where an app without a paid
+ * signature cannot put a new version in by itself, it opens the download page
+ * instead, and nothing more happens here.
  */
 function keepUpToDate({
   updater,
@@ -96,6 +99,7 @@ function keepUpToDate({
   store,
   isOn,
   ask,
+  download = () => updater.downloadUpdate(),
   now = Date.now,
   later = setTimeout,
   every = setInterval,
@@ -148,7 +152,7 @@ function keepUpToDate({
       isDownloading = true
 
       try {
-        await updater.downloadUpdate()
+        await download()
       } catch {
         // The download failed, with no network say: the next day's look asks again.
       } finally {
